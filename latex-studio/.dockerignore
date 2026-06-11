@@ -1,0 +1,13 @@
+**/node_modules
+**/dist
+**/.next
+**/.turbo
+**/coverage
+**/.prisma
+**/__pycache__
+**/*.pyc
+.git
+.gitignore
+.env
+.env.*
+!.env.example

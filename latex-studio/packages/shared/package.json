@@ -1,0 +1,25 @@
+{
+  "name": "@latex-studio/shared",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared TypeScript types for LaTeX Studio (consumed as source).",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint \"src/**/*.ts\"",
+    "test": "echo \"(no tests for shared types)\" && exit 0"
+  },
+  "devDependencies": {
+    "eslint": "^8.57.0",
+    "typescript": "^5.5.3"
+  }
+}

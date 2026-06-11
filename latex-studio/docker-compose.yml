@@ -1,0 +1,101 @@
+name: latex-studio
+
+# All published ports bind to 127.0.0.1 only — nothing is exposed on your LAN.
+#
+# Two ways to run:
+#   1. Dev (recommended):  docker compose up -d         → postgres + mathcheck + texlive
+#                          pnpm dev                     → web + api on the host (hot reload)
+#   2. Fully containerized: docker compose --profile full up   → also runs the api container
+#
+# The `api` service is in the `full` profile so it does not collide with the
+# host api started by `pnpm dev`.
+#
+# Compile workspace: a HOST directory (COMPILE_WORKSPACE, default ./.compile-workspace)
+# is bind-mounted into texlive at /workspace. A bind mount — not a named volume —
+# so the host-run api (`pnpm dev`) and the texlive container share the same files
+# directly: the api writes <project>/main.tex on the host, texlive sees it at
+# /workspace/<project>, and latexmk's output lands back on the host instantly.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: latex
+      POSTGRES_PASSWORD: latex
+      POSTGRES_DB: latex_studio
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U latex -d latex_studio"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  mathcheck:
+    build:
+      context: ./services/mathcheck
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8000:8000"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz').status==200 else 1)\""
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # TeX Live distribution with latexmk. Stays alive so the api can `docker exec`
+  # latexmk/synctex against the shared compile workspace.
+  texlive:
+    image: texlive/texlive:latest-full
+    container_name: latex-studio-texlive
+    restart: unless-stopped
+    command: ["sleep", "infinity"]
+    working_dir: /workspace
+    volumes:
+      - "${COMPILE_WORKSPACE:-./.compile-workspace}:/workspace"
+
+  api:
+    profiles: ["full"]
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      API_HOST: 0.0.0.0
+      API_PORT: "4000"
+      DATABASE_URL: postgresql://latex:latex@postgres:5432/latex_studio?schema=public
+      API_BEARER_TOKEN: ${API_BEARER_TOKEN:?set API_BEARER_TOKEN in .env}
+      # NO ANTHROPIC_API_KEY — AI uses the Claude subscription via `claude login`.
+      # The boot guard refuses to start if a key is present (ADR-004). AI features
+      # require the host api (the subscription credential is in the host Keychain,
+      # not the container); run `pnpm dev` for AI. MODEL_PROVIDER defaults to agent-sdk.
+      MODEL: ${MODEL:-claude-sonnet-4-6}
+      MATHCHECK_URL: http://mathcheck:8000
+      TEXLIVE_MODE: docker
+      COMPILE_WORKSPACE: /workspace
+      TEXLIVE_CONTAINER: latex-studio-texlive
+    ports:
+      - "127.0.0.1:4000:4000"
+    volumes:
+      - "${COMPILE_WORKSPACE:-./.compile-workspace}:/workspace"
+      # docker exec into the texlive container needs the daemon socket + CLI.
+      # (Host-run `pnpm dev` is the primary path and already has both.)
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "node -e \"fetch('http://127.0.0.1:4000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:

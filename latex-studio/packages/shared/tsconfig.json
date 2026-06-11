@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "noEmit": false,
+    // DOM provides AbortSignal/AbortController, used by the ModelProvider types.
+    // These shared types are consumed in both the browser and Node.
+    "lib": ["ES2022", "DOM"]
+  },
+  "include": ["src/**/*.ts"]
+}

@@ -1,0 +1,9 @@
+[project]
+name = "latex-studio-mathcheck"
+version = "0.1.0"
+description = "SymPy-based math verification microservice for LaTeX Studio."
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

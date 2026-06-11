@@ -1,0 +1,36 @@
+{
+  "name": "latex-studio",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A single-user, locally-hosted LaTeX editing application (a personal Overleaf).",
+  "packageManager": "pnpm@9.7.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "turbo run dev",
+    "dev:web": "turbo run dev --filter=@latex-studio/web",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "format": "prettier --write \"**/*.{ts,tsx,js,jsx,mjs,cjs,json,md,yml,yaml}\"",
+    "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,mjs,cjs,json,md,yml,yaml}\"",
+    "db:generate": "pnpm --filter @latex-studio/api db:generate",
+    "db:migrate": "pnpm --filter @latex-studio/api db:migrate",
+    "db:seed": "pnpm --filter @latex-studio/api db:seed",
+    "db:studio": "pnpm --filter @latex-studio/api db:studio",
+    "compose:up": "docker compose up -d",
+    "compose:down": "docker compose down"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.10",
+    "@typescript-eslint/eslint-plugin": "^7.16.1",
+    "@typescript-eslint/parser": "^7.16.1",
+    "eslint": "^8.57.0",
+    "eslint-config-prettier": "^9.1.0",
+    "prettier": "^3.3.3",
+    "turbo": "^2.0.9",
+    "typescript": "^5.5.3"
+  }
+}

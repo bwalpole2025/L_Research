@@ -1,0 +1,5 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+# services/mathcheck is a Python service and is intentionally not a pnpm
+# workspace package — it is built and run via docker-compose.

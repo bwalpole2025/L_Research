@@ -1,0 +1,118 @@
+// LaTeX Studio — Prisma schema.
+// Single-user app: no auth tables. Access is gated by a bearer token at the
+// API layer and a localhost-only bind (see README).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Project {
+  id        String   @id @default(cuid())
+  name      String
+  rootFile  String   @default("main.tex")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Mathcheck settings (Project settings page).
+  macros      Json?
+  assumptions String @default("")
+
+  // AI settings (Project settings page).
+  model          String @default("claude-sonnet-4-6")
+  aiInstructions String @default("")
+
+  files       TexFile[]
+  compileLogs CompileLog[]
+  snapshots   Snapshot[]
+  chatThreads ChatThread[]
+}
+
+// Chat transcript — WE own it (source of truth), replayed to the provider per
+// query rather than relying on the SDK's session/resume (see ADR-005).
+model ChatThread {
+  id        String   @id @default(cuid())
+  projectId String
+  title     String   @default("Chat")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project  Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  messages ChatMessage[]
+
+  @@index([projectId])
+}
+
+model ChatMessage {
+  id        String   @id @default(cuid())
+  threadId  String
+  role      String // "user" | "assistant"
+  content   String
+  createdAt DateTime @default(now())
+
+  thread ChatThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([threadId])
+}
+
+// Per-call AI latency/outcome — visibility into Agent SDK overhead per surface.
+model AiCallLog {
+  id        String   @id @default(cuid())
+  projectId String?
+  route     String // "chat" | "edit" | "fix" | "health" | "complete"
+  provider  String? // "agent-sdk" | "api"
+  model     String
+  variant   String? // completions: "warm" | "cold" | "baseline"
+  latencyMs Int
+  ok        Boolean
+  errorKind String? // AiErrorKind, when ok = false
+  createdAt DateTime @default(now())
+
+  @@index([projectId])
+  @@index([createdAt])
+  @@index([route])
+}
+
+model TexFile {
+  id        String   @id @default(cuid())
+  projectId String
+  path      String
+  content   String   @default("")
+  updatedAt DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, path])
+  @@index([projectId])
+}
+
+model CompileLog {
+  id         String   @id @default(cuid())
+  projectId  String
+  status     String // "success" | "error"
+  log        String
+  durationMs Int      @default(0)
+  createdAt  DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+}
+
+// Lightweight versioning: a labelled, point-in-time copy of a project's files
+// stored as JSONB so a snapshot is independent of later edits.
+model Snapshot {
+  id        String   @id @default(cuid())
+  projectId String
+  label     String
+  files     Json
+  createdAt DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+}

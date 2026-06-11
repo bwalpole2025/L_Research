@@ -1,0 +1,274 @@
+import type {
+  AiErrorKind,
+  AiModelsResponse,
+  AiStatsResponse,
+  AiStatus,
+  ChatContext,
+  ChatMessage,
+  ChatThread,
+  CompileResponse,
+  CompletionInlineRequest,
+  CompletionResult,
+  DerivationRequest,
+  DerivationResult,
+  EquivalenceRequest,
+  EquivalenceResult,
+  FixFromLogRequest,
+  InlineEditRequest,
+  MathParseRequest,
+  MathParseResult,
+  Project,
+  ReplacementResponse,
+  SyncForwardRequest,
+  SyncForwardResult,
+  SyncInverseRequest,
+  SyncInverseResult,
+  TexFile,
+} from '@latex-studio/shared';
+import type { FileMeta, SnapshotMeta } from './types';
+
+/**
+ * Browser-side API client. Every call hits the same-origin `/api/*` proxy
+ * (app/api/[...path]/route.ts), which injects the bearer token server-side — the
+ * browser never holds the secret.
+ */
+
+export class ApiError extends Error {
+  constructor(
+    public status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
+/** An AI request failure carrying the classified kind (for the banner/gating). */
+export class AiError extends Error {
+  constructor(
+    public status: number,
+    public kind: AiErrorKind,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'AiError';
+  }
+}
+
+async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const init: RequestInit = { method };
+  if (body !== undefined) {
+    init.headers = { 'content-type': 'application/json' };
+    init.body = JSON.stringify(body);
+  }
+  const res = await fetch(`/api${path}`, init);
+
+  if (!res.ok) {
+    let message = res.statusText;
+    try {
+      const data = (await res.json()) as { error?: string };
+      if (data.error) message = data.error;
+    } catch {
+      /* non-JSON error body */
+    }
+    throw new ApiError(res.status, message);
+  }
+
+  if (res.status === 204) return undefined as T;
+  return (await res.json()) as T;
+}
+
+/** Like `request`, but failures throw an `AiError` carrying the classified kind. */
+async function aiRequest<T>(method: string, path: string, body: unknown): Promise<T> {
+  const res = await fetch(`/api${path}`, {
+    method,
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let kind: AiErrorKind = 'other';
+    let message = res.statusText;
+    try {
+      const data = (await res.json()) as { error?: string; kind?: AiErrorKind };
+      if (data.kind) kind = data.kind;
+      if (data.error) message = data.error;
+    } catch {
+      /* non-JSON */
+    }
+    throw new AiError(res.status, kind, message);
+  }
+  return (await res.json()) as T;
+}
+
+export const api = {
+  listProjects: () => request<Project[]>('GET', '/projects'),
+  createProject: (name: string) => request<Project>('POST', '/projects', { name }),
+  getProject: (id: string) => request<Project>('GET', `/projects/${id}`),
+  updateProject: (
+    id: string,
+    patch: {
+      name?: string;
+      rootFile?: string;
+      macros?: Record<string, string>;
+      assumptions?: string;
+      model?: string;
+      aiInstructions?: string;
+    },
+  ) => request<Project>('PATCH', `/projects/${id}`, patch),
+
+  listFiles: (projectId: string) => request<FileMeta[]>('GET', `/projects/${projectId}/files`),
+  createFile: (projectId: string, path: string, content?: string) =>
+    request<TexFile>('POST', `/projects/${projectId}/files`, { path, content }),
+  getFile: (fileId: string) => request<TexFile>('GET', `/files/${fileId}`),
+  updateFile: (fileId: string, patch: { content?: string; path?: string }) =>
+    request<TexFile>('PATCH', `/files/${fileId}`, patch),
+  deleteFile: (fileId: string) => request<void>('DELETE', `/files/${fileId}`),
+
+  listSnapshots: (projectId: string) =>
+    request<SnapshotMeta[]>('GET', `/projects/${projectId}/snapshots`),
+  createSnapshot: (projectId: string, label: string) =>
+    request<SnapshotMeta>('POST', `/projects/${projectId}/snapshots`, { label }),
+  restoreSnapshot: (projectId: string, snapshotId: string) =>
+    request<FileMeta[]>('POST', `/projects/${projectId}/snapshots/${snapshotId}/restore`),
+
+  compile: (projectId: string) =>
+    request<CompileResponse>('POST', `/projects/${projectId}/compile`),
+  syncForward: (req: SyncForwardRequest) =>
+    request<SyncForwardResult>('POST', '/synctex/forward', req),
+  syncInverse: (req: SyncInverseRequest) =>
+    request<SyncInverseResult>('POST', '/synctex/inverse', req),
+
+  mathParse: (req: MathParseRequest) => request<MathParseResult>('POST', '/mathcheck/parse', req),
+  checkEquivalent: (req: EquivalenceRequest) =>
+    request<EquivalenceResult>('POST', '/mathcheck/equivalent', req),
+  checkDerivation: (req: DerivationRequest) =>
+    request<DerivationResult>('POST', '/mathcheck/check-derivation', req),
+
+  // AI (Claude Agent SDK over the subscription — all server-side).
+  getAiStatus: () => request<AiStatus>('GET', '/ai/status'),
+  getAiModels: () => request<AiModelsResponse>('GET', '/ai/models'),
+  listChatThreads: (projectId: string) =>
+    request<ChatThread[]>('GET', `/projects/${projectId}/chat/threads`),
+  createChatThread: (projectId: string, title?: string) =>
+    request<ChatThread>('POST', `/projects/${projectId}/chat/threads`, title ? { title } : {}),
+  getThreadMessages: (threadId: string) =>
+    request<ChatMessage[]>('GET', `/chat/threads/${threadId}/messages`),
+  deleteChatThread: (threadId: string) => request<void>('DELETE', `/chat/threads/${threadId}`),
+  aiEdit: (projectId: string, req: InlineEditRequest) =>
+    aiRequest<ReplacementResponse>('POST', `/projects/${projectId}/edit`, req),
+  aiFix: (projectId: string, req: FixFromLogRequest) =>
+    aiRequest<ReplacementResponse>('POST', `/projects/${projectId}/fix`, req),
+  getAiStats: () => request<AiStatsResponse>('GET', '/ai/stats'),
+};
+
+/** Request an inline completion, cancellable via `signal`. Throws `AiError`. */
+export async function completeCode(
+  projectId: string,
+  req: CompletionInlineRequest,
+  signal: AbortSignal,
+): Promise<CompletionResult> {
+  const res = await fetch(`/api/projects/${projectId}/complete`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(req),
+    signal,
+  });
+  if (res.status === 204) {
+    return { completion: '', latencyMs: 0, variant: 'warm', provider: '', model: '' };
+  }
+  if (!res.ok) {
+    let kind: AiErrorKind = 'other';
+    let message = res.statusText;
+    try {
+      const data = (await res.json()) as { error?: string; kind?: AiErrorKind };
+      if (data.kind) kind = data.kind;
+      if (data.error) message = data.error;
+    } catch {
+      /* non-JSON */
+    }
+    throw new AiError(res.status, kind, message);
+  }
+  return (await res.json()) as CompletionResult;
+}
+
+export interface ChatStreamHandlers {
+  onMeta?: (threadId: string) => void;
+  onToken: (text: string) => void;
+  onDone: (info: { threadId: string; messageId: string }) => void;
+  onError: (kind: AiErrorKind, message: string) => void;
+}
+
+/**
+ * Stream a chat reply token-by-token over SSE (through the /api proxy). The
+ * server owns the transcript; this only relays deltas to the UI.
+ */
+export async function streamChat(
+  projectId: string,
+  body: { threadId?: string; message: string; context?: ChatContext },
+  handlers: ChatStreamHandlers,
+  signal?: AbortSignal,
+): Promise<void> {
+  const init: RequestInit = {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  };
+  if (signal) init.signal = signal;
+
+  let res: Response;
+  try {
+    res = await fetch(`/api/projects/${projectId}/chat`, init);
+  } catch {
+    handlers.onError('unavailable', 'Could not reach the AI service.');
+    return;
+  }
+
+  if (!res.ok || !res.body) {
+    let kind: AiErrorKind = 'other';
+    let message = res.statusText;
+    try {
+      const data = (await res.json()) as { error?: string; kind?: AiErrorKind };
+      if (data.kind) kind = data.kind;
+      if (data.error) message = data.error;
+    } catch {
+      /* non-JSON */
+    }
+    handlers.onError(kind, message);
+    return;
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let idx: number;
+    while ((idx = buffer.indexOf('\n\n')) !== -1) {
+      const block = buffer.slice(0, idx);
+      buffer = buffer.slice(idx + 2);
+      const event = /event: (.*)/.exec(block)?.[1];
+      const dataLine = /data: (.*)/.exec(block)?.[1];
+      if (!event || dataLine === undefined) continue;
+      let data: unknown;
+      try {
+        data = JSON.parse(dataLine);
+      } catch {
+        continue;
+      }
+      if (event === 'meta') handlers.onMeta?.((data as { threadId: string }).threadId);
+      else if (event === 'token') handlers.onToken((data as { text: string }).text);
+      else if (event === 'done') handlers.onDone(data as { threadId: string; messageId: string });
+      else if (event === 'error') {
+        const e = data as { kind: AiErrorKind; message: string };
+        handlers.onError(e.kind, e.message);
+      }
+    }
+  }
+}
+
+/** Browser URL for a compiled PDF (an api-relative path goes through the proxy). */
+export function pdfBrowserUrl(apiRelativeUrl: string): string {
+  return `/api${apiRelativeUrl}`;
+}

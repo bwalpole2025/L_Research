@@ -1,0 +1,16 @@
+# Web framework
+fastapi>=0.111,<0.116
+uvicorn[standard]>=0.30
+pydantic>=2.7
+httpx>=0.27
+
+# Math stack (versions verified to interoperate on Python 3.12):
+#  - latex2sympy2 1.9.1 pins antlr4-python3-runtime to 4.7.2 (its generated parser),
+#    so SymPy's antlr LaTeX backend is unusable — we use the Lark backend instead.
+sympy==1.14.0
+latex2sympy2==1.9.1
+antlr4-python3-runtime==4.7.2
+lark>=1.1
+
+# Tests
+pytest>=8.2

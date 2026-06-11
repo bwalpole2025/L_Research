@@ -1,0 +1,50 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+.next/
+out/
+.turbo/
+*.tsbuildinfo
+
+# Tests / coverage
+coverage/
+
+# Env (never commit secrets — keep .env.example only)
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Prisma generated client
+**/.prisma/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+
+# LaTeX compile artifacts
+*.aux
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.out
+*.toc
+
+# Per-project compile working dirs (shared with the texlive container)
+.compile-workspace/
+
+# Generated pdf.js worker (copied from node_modules by predev/prebuild)
+apps/web/public/pdf.worker.min.mjs
+
+# OS
+.DS_Store

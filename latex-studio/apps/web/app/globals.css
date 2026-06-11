@@ -1,0 +1,68 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body {
+  height: 100%;
+}
+
+/* The editor is a full-viewport workspace. */
+.ls-app {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* CodeMirror should fill its pane and scroll internally. */
+.cm-editor {
+  height: 100%;
+}
+.cm-scroller {
+  font-family: var(--ls-mono, 'JetBrains Mono', ui-monospace, monospace);
+}
+
+/* Transient line highlight after a jump (diagnostic click / SyncTeX). */
+.cm-flash-line {
+  background-color: rgba(245, 158, 11, 0.22);
+  animation: ls-flash 1.2s ease-out;
+}
+@keyframes ls-flash {
+  from {
+    background-color: rgba(245, 158, 11, 0.45);
+  }
+  to {
+    background-color: rgba(245, 158, 11, 0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cm-flash-line {
+    animation: none;
+  }
+}
+
+/* Math-check gutter (✓ / ✗ / ? / ! per checked equation). */
+.cm-math-gutter {
+  width: 1.1rem;
+}
+.cm-math-marker {
+  display: inline-flex;
+  width: 100%;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 0.8rem;
+  cursor: default;
+}
+.cm-math-ok {
+  color: #10b981;
+}
+.cm-math-fail {
+  color: #ef4444;
+}
+.cm-math-unknown {
+  color: #f59e0b;
+}
+.cm-math-warn {
+  color: #d97706;
+}
