@@ -97,5 +97,19 @@ services:
       timeout: 5s
       retries: 5
 
+  # Optional LOCAL grammar/style engine for the prose check (Phase 7, Feature 2).
+  # Opt-in: `docker compose --profile prose up -d languagetool`. No text leaves
+  # the machine. Point the api at it via LANGUAGETOOL_URL (see .env.example);
+  # when unset the prose check stays spelling + lints only (still fully local).
+  languagetool:
+    profiles: ["prose", "full"]
+    image: erikvl87/languagetool:latest
+    restart: unless-stopped
+    environment:
+      Java_Xms: 256m
+      Java_Xmx: 1g
+    ports:
+      - "127.0.0.1:8010:8010"
+
 volumes:
   pgdata:

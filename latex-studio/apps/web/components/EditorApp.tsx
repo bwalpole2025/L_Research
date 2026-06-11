@@ -4,10 +4,10 @@ import { useEffect, useState } from 'react';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { useEditorStore } from '@/lib/store';
 import { useAiStore } from '@/lib/aiStore';
+import { useThesisStore } from '@/lib/thesisStore';
+import { useCoderiveStore } from '@/lib/coderiveStore';
 import { Toolbar } from './Toolbar';
-import { FileTree } from './FileTree';
 import { EditorPane } from './EditorPane';
-import { DiagnosticsPanel } from './DiagnosticsPanel';
 import { PdfViewer } from './PdfViewer';
 import { SnapshotsDialog } from './SnapshotsDialog';
 import { ProjectSettingsDialog } from './ProjectSettingsDialog';
@@ -17,6 +17,12 @@ import { AiBanner } from './ai/AiBanner';
 import { InlineEditPrompt } from './ai/InlineEditPrompt';
 import { DiffReviewDialog } from './ai/DiffReviewDialog';
 import { CompletionStatusBar } from './ai/CompletionStatusBar';
+import { LeftRail } from './thesis/LeftRail';
+import { BottomPanelTabs } from './thesis/BottomPanelTabs';
+import { PreSubmitDialog } from './thesis/PreSubmitDialog';
+import { CoderiveDialog } from './coderive/CoderiveDialog';
+import { UploadConfirmDialog, TrashDialog } from './library/LibraryDialogs';
+import { KeyboardReference } from './KeyboardReference';
 
 function CreateFirstProject() {
   const createProject = useEditorStore((s) => s.createProject);
@@ -34,10 +40,10 @@ function CreateFirstProject() {
   };
 
   return (
-    <div className="flex h-full flex-1 items-center justify-center p-8">
-      <div className="w-full max-w-sm rounded-lg border border-slate-200 p-6 dark:border-slate-800">
-        <h1 className="text-lg font-semibold">Create your first project</h1>
-        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+    <div className="flex h-full flex-1 items-center justify-center bg-[var(--ls-bg)] p-8">
+      <div className="w-full max-w-sm rounded-md border border-zinc-200 bg-[var(--ls-surface-raised)] p-6 shadow-[var(--ls-shadow-soft)] dark:border-zinc-800">
+        <h1 className="text-lg font-semibold text-zinc-950 dark:text-zinc-50">Create your first project</h1>
+        <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
           It will start with a minimal, compilable <code>main.tex</code>.
         </p>
         <input
@@ -47,14 +53,14 @@ function CreateFirstProject() {
             if (e.key === 'Enter') void submit();
           }}
           aria-label="Project name"
-          className="mt-4 w-full rounded border border-slate-300 bg-transparent px-3 py-2 text-sm dark:border-slate-700"
+          className="mt-4 h-10 w-full rounded-md border border-zinc-200 bg-zinc-50 px-3 text-sm text-zinc-900 outline-none transition-colors placeholder:text-zinc-400 focus:border-blue-400 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-100"
           placeholder="Project name"
         />
         <button
           type="button"
           disabled={busy}
           onClick={() => void submit()}
-          className="mt-3 w-full rounded bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white"
+          className="mt-3 h-10 w-full rounded-md bg-blue-600 px-3 text-sm font-medium text-white shadow-[0_8px_18px_rgba(37,99,235,0.2)] transition-colors hover:bg-blue-500 disabled:opacity-50"
         >
           Create project
         </button>
@@ -71,9 +77,15 @@ export function EditorApp() {
   const compileProject = useEditorStore((s) => s.compileProject);
   const checkDerivation = useEditorStore((s) => s.checkDerivation);
   const chatOpen = useAiStore((s) => s.chatOpen);
+  const runAudit = useThesisStore((s) => s.runAudit);
+  const runProse = useThesisStore((s) => s.runProse);
+  const openPreSubmit = useThesisStore((s) => s.openPreSubmit);
+  const setLeftTab = useThesisStore((s) => s.setLeftTab);
+  const openCoderive = useCoderiveStore((s) => s.openDialog);
   const [snapshotsOpen, setSnapshotsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [mathOpen, setMathOpen] = useState(false);
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
 
   useEffect(() => {
     void bootstrap();
@@ -84,27 +96,46 @@ export function EditorApp() {
     void checkDerivation();
   };
 
-  // Global shortcuts (skipped when the editor already handled the key):
-  //   ⌘/Ctrl+Enter        → compile
-  //   ⌘/Ctrl+Shift+Enter  → check derivation
+  // Global shortcuts (skipped when the editor already handled the key).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!(e.metaKey || e.ctrlKey) || e.key !== 'Enter' || e.defaultPrevented) return;
-      e.preventDefault();
-      if (e.shiftKey) {
-        setMathOpen(true);
-        void checkDerivation();
-      } else {
-        void compileProject();
+      if (!(e.metaKey || e.ctrlKey) || e.defaultPrevented) return;
+      const key = e.key.toLowerCase();
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        if (e.shiftKey) {
+          setMathOpen(true);
+          void checkDerivation();
+        } else void compileProject();
+      } else if (key === '/') {
+        e.preventDefault();
+        setKeyboardOpen((v) => !v);
+      } else if (e.shiftKey && key === 'a') {
+        e.preventDefault();
+        void runAudit('file');
+      } else if (e.shiftKey && key === 'l') {
+        e.preventDefault();
+        void runProse('file');
+      } else if (e.shiftKey && key === 's') {
+        e.preventDefault();
+        openPreSubmit();
+      } else if (e.shiftKey && key === 'o') {
+        e.preventDefault();
+        setLeftTab(useThesisStore.getState().leftTab === 'outline' ? 'files' : 'outline');
+      } else if (e.shiftKey && key === 'd') {
+        e.preventDefault();
+        openCoderive();
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [compileProject, checkDerivation]);
+  }, [compileProject, checkDerivation, runAudit, runProse, openPreSubmit, setLeftTab, openCoderive]);
 
   if (!ready) {
     return (
-      <div className="ls-app items-center justify-center text-sm text-slate-400">Loading…</div>
+      <div className="ls-app items-center justify-center text-sm font-medium text-zinc-500 dark:text-zinc-400">
+        Loading…
+      </div>
     );
   }
 
@@ -117,7 +148,7 @@ export function EditorApp() {
       />
 
       {error && (
-        <div className="border-b border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">
+        <div className="border-b border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 dark:border-red-900/70 dark:bg-red-950/40 dark:text-red-300">
           {error}
         </div>
       )}
@@ -127,33 +158,45 @@ export function EditorApp() {
       {projects.length === 0 ? (
         <CreateFirstProject />
       ) : (
-        <div className="flex min-h-0 flex-1">
+        <div className="flex min-h-0 flex-1 bg-[var(--ls-bg)] p-2">
           <PanelGroup direction="horizontal" className="min-h-0 min-w-0 flex-1" autoSaveId="latex-studio:panels">
-            <Panel defaultSize={18} minSize={12} className="border-r border-slate-200 dark:border-slate-800">
-              <FileTree />
+            <Panel
+              defaultSize={18}
+              minSize={12}
+              className="overflow-hidden rounded-md border border-zinc-200 bg-[var(--ls-surface)] shadow-[var(--ls-shadow-soft)] dark:border-zinc-800"
+            >
+              <LeftRail />
             </Panel>
-            <PanelResizeHandle className="w-1 bg-slate-200 transition-colors hover:bg-sky-400 dark:bg-slate-800" />
+            <PanelResizeHandle className="w-2 bg-transparent transition-colors hover:bg-blue-400/20" />
 
-            <Panel defaultSize={48} minSize={25}>
+            <Panel
+              defaultSize={48}
+              minSize={25}
+              className="overflow-hidden rounded-md border border-zinc-200 bg-[var(--ls-surface)] shadow-[var(--ls-shadow-soft)] dark:border-zinc-800"
+            >
               <PanelGroup direction="vertical" autoSaveId="latex-studio:editor-panels">
-                <Panel defaultSize={72} minSize={30}>
+                <Panel defaultSize={68} minSize={25}>
                   <EditorPane />
                 </Panel>
-                <PanelResizeHandle className="h-1 bg-slate-200 transition-colors hover:bg-sky-400 dark:bg-slate-800" />
-                <Panel defaultSize={28} minSize={10} collapsible className="border-t border-slate-200 dark:border-slate-800">
-                  <DiagnosticsPanel />
+                <PanelResizeHandle className="h-2 bg-[var(--ls-bg)] transition-colors hover:bg-blue-400/20" />
+                <Panel defaultSize={32} minSize={12} collapsible className="border-t border-zinc-200 dark:border-zinc-800">
+                  <BottomPanelTabs />
                 </Panel>
               </PanelGroup>
             </Panel>
 
-            <PanelResizeHandle className="w-1 bg-slate-200 transition-colors hover:bg-sky-400 dark:bg-slate-800" />
-            <Panel defaultSize={34} minSize={18} className="border-l border-slate-200 dark:border-slate-800">
+            <PanelResizeHandle className="w-2 bg-transparent transition-colors hover:bg-blue-400/20" />
+            <Panel
+              defaultSize={34}
+              minSize={18}
+              className="overflow-hidden rounded-md border border-zinc-200 bg-[var(--ls-surface)] shadow-[var(--ls-shadow-soft)] dark:border-zinc-800"
+            >
               <PdfViewer />
             </Panel>
           </PanelGroup>
 
           {chatOpen && (
-            <aside className="w-96 shrink-0 border-l border-slate-200 dark:border-slate-800">
+            <aside className="ml-2 w-96 shrink-0 overflow-hidden rounded-md border border-zinc-200 bg-[var(--ls-surface)] shadow-[var(--ls-shadow-soft)] dark:border-zinc-800">
               <ChatSidebar />
             </aside>
           )}
@@ -167,6 +210,11 @@ export function EditorApp() {
       <MathResultsDialog open={mathOpen} onClose={() => setMathOpen(false)} />
       <InlineEditPrompt />
       <DiffReviewDialog />
+      <PreSubmitDialog />
+      <CoderiveDialog />
+      <UploadConfirmDialog />
+      <TrashDialog />
+      <KeyboardReference open={keyboardOpen} onClose={() => setKeyboardOpen(false)} />
     </div>
   );
 }

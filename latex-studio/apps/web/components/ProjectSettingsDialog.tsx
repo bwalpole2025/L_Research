@@ -5,6 +5,7 @@ import { Plus, Settings, Trash2, X } from 'lucide-react';
 import { useEditorStore } from '@/lib/store';
 import { useAiStore } from '@/lib/aiStore';
 import { useCompletionStore } from '@/lib/completionStore';
+import { useDocumentModelStore } from '@/lib/documentModelStore';
 import { ApiError } from '@/lib/api';
 import type { CompletionMode } from '@/lib/types';
 
@@ -33,6 +34,14 @@ export function ProjectSettingsDialog({ open, onClose }: { open: boolean; onClos
   const compEnabled = useCompletionStore((s) => s.enabled);
   const compPerMode = useCompletionStore((s) => s.perMode);
   const compDebounce = useCompletionStore((s) => s.debounceMs);
+  const docAware = useDocumentModelStore((s) => s.enabled);
+  const setDocAware = useDocumentModelStore((s) => s.setEnabled);
+  const includeLevel = useDocumentModelStore((s) => s.includeLevel);
+  const setIncludeLevel = useDocumentModelStore((s) => s.setIncludeLevel);
+  const gran = useDocumentModelStore((s) => s.granularityDefault);
+  const setGran = useDocumentModelStore((s) => s.setGranularityDefault);
+  const predictModel = useDocumentModelStore((s) => s.predictModel);
+  const setPredictModel = useDocumentModelStore((s) => s.setPredictModel);
   const compModel = useCompletionStore((s) => s.model);
   const compProvider = useCompletionStore((s) => s.provider);
   const compBaseline = useCompletionStore((s) => s.baseline);
@@ -300,6 +309,44 @@ export function ProjectSettingsDialog({ open, onClose }: { open: boolean; onClos
                 className="h-3.5 w-3.5 accent-sky-500"
               />
               Force baseline (no warm pool) — for latency comparison on /stats
+            </label>
+          </section>
+
+          <section className="mt-6">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Document-aware prediction</h3>
+            <p className="mt-1 text-xs text-slate-400">
+              Grounds predictions in a cached context card (notation, outline, intent). Rebuilt on a slow debounce, not per keystroke.
+            </p>
+            <label className="mt-2 flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={docAware} onChange={(e) => setDocAware(e.target.checked)} className="h-3.5 w-3.5 accent-sky-500" />
+              Use the document model (off = plain local-window completion)
+            </label>
+            <label className="mt-3 block text-xs font-medium text-slate-600 dark:text-slate-300">
+              Include
+              <select value={includeLevel} disabled={!docAware} onChange={(e) => setIncludeLevel(e.target.value as typeof includeLevel)} className="mt-1 block w-full rounded border border-slate-300 bg-transparent px-2 py-1.5 text-sm dark:border-slate-700">
+                <option value="card">Card only</option>
+                <option value="card+recent">Card + recent derivation</option>
+                <option value="card+excerpt">Card + broader excerpt</option>
+              </select>
+            </label>
+            <label className="mt-3 block text-xs font-medium text-slate-600 dark:text-slate-300">
+              “Predict next” default granularity
+              <select value={gran} onChange={(e) => setGran(e.target.value as typeof gran)} className="mt-1 block w-full rounded border border-slate-300 bg-transparent px-2 py-1.5 text-sm dark:border-slate-700">
+                <option value="auto">Auto (from cursor context)</option>
+                <option value="prose">Prose</option>
+                <option value="maths">Maths</option>
+                <option value="structural">Structural</option>
+              </select>
+            </label>
+            <label className="mt-3 block text-xs font-medium text-slate-600 dark:text-slate-300">
+              “Predict next” model (a stronger model is fine — it is user-triggered, not per-keystroke)
+              <select value={predictModel} onChange={(e) => setPredictModel(e.target.value)} className="mt-1 block w-full rounded border border-slate-300 bg-transparent px-2 py-1.5 text-sm dark:border-slate-700">
+                {(completionModelOptions.includes(predictModel) ? completionModelOptions : [predictModel, ...completionModelOptions]).map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
             </label>
           </section>
         </div>

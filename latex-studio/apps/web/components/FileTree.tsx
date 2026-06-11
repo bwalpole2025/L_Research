@@ -1,20 +1,24 @@
 'use client';
 
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import {
   ChevronDown,
   ChevronRight,
   FileCode,
+  FileImage,
   FilePlus,
   FolderClosed,
   FolderOpen,
   FolderPlus,
   Pencil,
   Trash2,
+  Upload,
   type LucideIcon,
 } from 'lucide-react';
 import { useEditorStore } from '@/lib/store';
+import { useThesisStore } from '@/lib/thesisStore';
 import { ApiError } from '@/lib/api';
+import { ALL_EXTENSIONS, isBinaryPath } from '@/lib/fileKind';
 import { basename, buildTree, parentPath, type TreeNode } from '@/lib/treeUtils';
 
 function reportError(err: unknown): void {
@@ -37,7 +41,7 @@ function IconButton({ icon: Icon, label, onClick }: IconButtonProps) {
         e.stopPropagation();
         onClick();
       }}
-      className="rounded p-1 text-slate-400 hover:bg-slate-200 hover:text-slate-700 dark:hover:bg-slate-700 dark:hover:text-slate-200"
+      className="rounded p-1 text-zinc-400 transition-colors hover:bg-zinc-200 hover:text-zinc-800 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
     >
       <Icon className="h-3.5 w-3.5" />
     </button>
@@ -48,6 +52,28 @@ export function FileTree() {
   const files = useEditorStore((s) => s.files);
   const folders = useEditorStore((s) => s.folders);
   const activeFileId = useEditorStore((s) => s.activeFileId);
+  const uploadFiles = useEditorStore((s) => s.uploadFiles);
+  const unverifiedByFile = useThesisStore((s) => s.auditReport?.byFile ?? {});
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const uploadDirRef = useRef<string>('');
+
+  const triggerUpload = useCallback((dir: string) => {
+    uploadDirRef.current = dir;
+    fileInputRef.current?.click();
+  }, []);
+
+  const onUploadChange = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const picked = Array.from(e.target.files ?? []);
+      e.target.value = ''; // allow re-selecting the same file
+      if (picked.length === 0) return;
+      const { uploaded, errors } = await uploadFiles(picked, uploadDirRef.current);
+      if (errors.length > 0) {
+        window.alert(`Uploaded ${uploaded} file(s).\n\nSkipped:\n${errors.join('\n')}`);
+      }
+    },
+    [uploadFiles],
+  );
   const openFile = useEditorStore((s) => s.openFile);
   const createFile = useEditorStore((s) => s.createFile);
   const createFolder = useEditorStore((s) => s.createFolder);
@@ -138,21 +164,21 @@ export function FileTree() {
         return (
           <div key={`d:${node.path}`}>
             <div
-              className="group flex items-center gap-1 py-1 pr-2 text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800/60"
+              className="group mx-1 flex h-7 items-center gap-1 rounded-md pr-2 text-[13px] font-medium text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-950 dark:text-zinc-300 dark:hover:bg-zinc-900 dark:hover:text-zinc-50"
               style={pad}
             >
               <button
                 type="button"
                 onClick={() => toggle(node.path)}
-                className="shrink-0 text-slate-400"
+                className="shrink-0 text-zinc-400 transition-colors group-hover:text-zinc-600 dark:group-hover:text-zinc-300"
                 aria-label={open ? 'Collapse' : 'Expand'}
               >
                 {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
               </button>
               {open ? (
-                <FolderOpen className="h-4 w-4 shrink-0 text-sky-500" />
+                <FolderOpen className="h-4 w-4 shrink-0 text-blue-500" />
               ) : (
-                <FolderClosed className="h-4 w-4 shrink-0 text-sky-500" />
+                <FolderClosed className="h-4 w-4 shrink-0 text-blue-500" />
               )}
               <span
                 className="flex-1 cursor-pointer truncate"
@@ -162,6 +188,7 @@ export function FileTree() {
               </span>
               <div className="hidden items-center group-hover:flex">
                 <IconButton icon={FilePlus} label="New file" onClick={() => void newFile(node.path)} />
+                <IconButton icon={Upload} label="Upload here" onClick={() => triggerUpload(node.path)} />
                 <IconButton icon={FolderPlus} label="New folder" onClick={() => newFolder(node.path)} />
                 <IconButton icon={Pencil} label="Rename folder" onClick={() => void doRenameFolder(node.path)} />
                 <IconButton icon={Trash2} label="Delete folder" onClick={() => void doDeleteFolder(node.path)} />
@@ -176,14 +203,18 @@ export function FileTree() {
       return (
         <div
           key={`f:${node.id}`}
-          className={`group flex items-center gap-1.5 py-1 pr-2 ${
+          className={`group mx-1 flex h-7 items-center gap-1.5 rounded-md pr-2 text-[13px] transition-colors ${
             active
-              ? 'bg-sky-100 text-slate-900 dark:bg-sky-500/20 dark:text-slate-50'
-              : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800/60'
+              ? 'bg-blue-50 font-medium text-zinc-950 ring-1 ring-inset ring-blue-200 dark:bg-blue-500/15 dark:text-blue-50 dark:ring-blue-500/30'
+              : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-950 dark:text-zinc-300 dark:hover:bg-zinc-900 dark:hover:text-zinc-50'
           }`}
           style={pad}
         >
-          <FileCode className="ml-[18px] h-4 w-4 shrink-0 text-slate-400" />
+          {isBinaryPath(node.path) ? (
+            <FileImage className="ml-[18px] h-4 w-4 shrink-0 text-violet-500" />
+          ) : (
+            <FileCode className="ml-[18px] h-4 w-4 shrink-0 text-zinc-400" />
+          )}
           <span
             className="flex-1 cursor-pointer truncate"
             data-testid={`file-${node.path}`}
@@ -191,6 +222,15 @@ export function FileTree() {
           >
             {node.name}
           </span>
+          {(unverifiedByFile[node.path] ?? 0) > 0 && (
+            <span
+              data-testid={`unverified-${node.path}`}
+              title={`${unverifiedByFile[node.path]} unverified equation(s)`}
+              className="shrink-0 rounded bg-amber-100 px-1.5 text-[10px] font-semibold text-amber-800 group-hover:hidden dark:bg-amber-500/15 dark:text-amber-200"
+            >
+              {unverifiedByFile[node.path]}
+            </span>
+          )}
           <div className="hidden items-center group-hover:flex">
             <IconButton icon={Pencil} label="Rename file" onClick={() => void doRenameFile(node.id, node.path)} />
             <IconButton icon={Trash2} label="Delete file" onClick={() => void doDeleteFile(node.id, node.path)} />
@@ -200,17 +240,27 @@ export function FileTree() {
     });
 
   return (
-    <div className="flex h-full flex-col bg-slate-50 dark:bg-slate-900/40">
-      <div className="flex items-center justify-between border-b border-slate-200 px-3 py-2 text-xs font-medium uppercase tracking-wide text-slate-500 dark:border-slate-800 dark:text-slate-400">
-        Files
+    <div className="flex h-full flex-col bg-[var(--ls-surface)]">
+      <div className="flex h-10 items-center justify-between border-b border-zinc-200 bg-[var(--ls-surface-muted)] px-3 text-xs font-semibold text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
+        <span>Files</span>
         <div className="flex items-center gap-0.5">
           <IconButton icon={FilePlus} label="New file" onClick={() => void newFile('')} />
+          <IconButton icon={Upload} label="Upload files" onClick={() => triggerUpload('')} />
           <IconButton icon={FolderPlus} label="New folder" onClick={() => newFolder('')} />
         </div>
       </div>
-      <div className="flex-1 overflow-auto py-1 text-sm">
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        accept={ALL_EXTENSIONS.join(',')}
+        data-testid="file-upload-input"
+        className="hidden"
+        onChange={(e) => void onUploadChange(e)}
+      />
+      <div className="flex-1 overflow-auto py-1.5 text-sm">
         {tree.length === 0 ? (
-          <p className="px-3 py-4 text-xs text-slate-400">No files yet — create one above.</p>
+          <p className="px-3 py-4 text-xs text-zinc-400">No files yet.</p>
         ) : (
           renderNodes(tree, 0)
         )}

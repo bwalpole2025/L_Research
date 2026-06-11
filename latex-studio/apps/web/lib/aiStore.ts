@@ -23,8 +23,11 @@ export interface PendingDiff {
   to: number;
   original: string;
   replacement: string;
-  source: 'edit' | 'fix';
+  source: 'edit' | 'fix' | 'coderive';
   filePath: string;
+  /** For a forced unverified/unknown co-derive insert: underline `warnText` with this tooltip on accept. */
+  unverifiedMessage?: string;
+  warnText?: string;
 }
 
 const KIND_MESSAGES: Record<AiErrorKind, string> = {
@@ -75,6 +78,7 @@ interface AiState {
   submitInlineEdit: (instruction: string) => Promise<void>;
   requestFix: (diagnostic: Diagnostic) => Promise<void>;
 
+  openDiff: (diff: PendingDiff) => void;
   acceptDiff: () => void;
   rejectDiff: () => void;
   insertAtCursor: (text: string) => void;
@@ -355,10 +359,18 @@ export const useAiStore = create<AiState>((set, get) => {
       }
     },
 
+    openDiff(diff: PendingDiff) {
+      set({ pendingDiff: diff });
+    },
+
     acceptDiff() {
       const diff = get().pendingDiff;
       if (!diff) return;
       editorController.applyEdit(diff.from, diff.to, diff.original, diff.replacement);
+      // A forced unverified/unknown step gets the amber "unverified" underline.
+      if (diff.unverifiedMessage && diff.warnText) {
+        editorController.markUnverified(diff.warnText, diff.unverifiedMessage);
+      }
       set({ pendingDiff: null });
     },
 

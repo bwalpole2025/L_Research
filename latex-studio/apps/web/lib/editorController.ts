@@ -1,5 +1,6 @@
 import { EditorSelection } from '@codemirror/state';
 import type { EditorView } from '@codemirror/view';
+import { addWarning } from '../components/editor/inlineSuggest';
 
 /**
  * A tiny singleton bridge to the live CodeMirror view, so non-editor code
@@ -66,6 +67,39 @@ export const editorController = {
     if (!currentView) return '';
     const sel = currentView.state.selection.main;
     return currentView.state.doc.sliceString(sel.from, sel.to);
+  },
+
+  /** 1-based line range covered by the primary selection (cursor → single line). */
+  getSelectionLines(): { fromLine: number; toLine: number } | null {
+    if (!currentView) return null;
+    const sel = currentView.state.selection.main;
+    const doc = currentView.state.doc;
+    return { fromLine: doc.lineAt(sel.from).number, toLine: doc.lineAt(sel.to).number };
+  },
+
+  /** The text of a 1-based line (empty string if out of range). */
+  lineText(line: number): string {
+    if (!currentView) return '';
+    const doc = currentView.state.doc;
+    if (line < 1 || line > doc.lines) return '';
+    return doc.line(line).text;
+  },
+
+  /** Document offsets {from, to} of a 1-based line, or null. */
+  lineRange(line: number): { from: number; to: number } | null {
+    if (!currentView) return null;
+    const doc = currentView.state.doc;
+    if (line < 1 || line > doc.lines) return null;
+    const l = doc.line(line);
+    return { from: l.from, to: l.to };
+  },
+
+  /** Amber "unverified" underline + tooltip over the first occurrence of `stepText`. */
+  markUnverified(stepText: string, message: string): void {
+    if (!currentView || !stepText.trim()) return;
+    const idx = currentView.state.doc.toString().indexOf(stepText);
+    if (idx === -1) return;
+    addWarning(currentView, idx, idx + stepText.length, message);
   },
 
   /**
@@ -172,6 +206,31 @@ export const editorController = {
       changes: { from: f, to: t, insert: text },
       selection: EditorSelection.cursor(f + text.length),
     });
+    currentView.focus();
+    return true;
+  },
+
+  /**
+   * Replace a word at a 1-based line/column (a prose fix). Verifies the word
+   * matches `expected`; if not, locates `expected` on the line. Never bulk-edits.
+   */
+  replaceWordAt(line: number, column: number, endColumn: number, replacement: string, expected?: string): boolean {
+    if (!currentView) return false;
+    const doc = currentView.state.doc;
+    if (line < 1 || line > doc.lines) return false;
+    const l = doc.line(line);
+    let from = l.from + Math.max(0, column - 1);
+    let to = endColumn > column ? l.from + (endColumn - 1) : from + (expected?.length ?? 0);
+    to = Math.min(to, l.to);
+
+    if (expected && doc.sliceString(from, to) !== expected) {
+      const idx = l.text.indexOf(expected);
+      if (idx === -1) return false;
+      from = l.from + idx;
+      to = from + expected.length;
+    }
+    if (to <= from) return false;
+    currentView.dispatch({ changes: { from, to, insert: replacement } });
     currentView.focus();
     return true;
   },

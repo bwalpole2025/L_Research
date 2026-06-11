@@ -47,6 +47,8 @@ export interface TexFile {
   /** Project-relative POSIX path, e.g. "chapters/intro.tex". */
   path: string;
   content: string;
+  /** "utf8" for text, "base64" for uploaded binary files (figures, fonts, PDFs). */
+  encoding: string;
   /** ISO-8601 timestamp. */
   updatedAt: string;
 }
@@ -399,6 +401,40 @@ export interface CompletionInlineRequest {
   provider?: 'agent-sdk' | 'api';
   /** Force a fresh, non-warm call (baseline benchmarking). */
   baseline?: boolean;
+  /** Cached document context card (document-aware prediction) — always cheap to include. */
+  contextCard?: string;
+  /** Where the cursor is (e.g. "mid-derivation", "after \\begin{proof}", "in the abstract"). */
+  position?: string;
+}
+
+// ─── Document-aware prediction (DocumentModel + multi-granularity predict-next) ─
+
+export interface DocumentModelResponse {
+  /** Compact, budgeted context card included in every prediction prompt. */
+  card: string;
+  /** Macro + glossary symbols, for the client notation post-filter. */
+  notationSymbols: string[];
+  outline: { title: string; level: number }[];
+  builtAt: string;
+}
+
+export type PredictGranularity = 'auto' | 'prose' | 'maths' | 'structural';
+
+export interface PredictNextRequest {
+  fileId: string;
+  cursorLine: number;
+  granularity: PredictGranularity;
+  card?: string;
+  position?: string;
+  model?: string;
+  overrides?: FileOverrides;
+}
+
+export interface PredictNextResponse {
+  prediction: string;
+  kind: 'prose' | 'maths' | 'structural';
+  /** For maths predictions: the step(s) split out for SymPy chain verification. */
+  steps?: string[];
 }
 
 export type CompletionVariant = 'warm' | 'cold' | 'baseline';
@@ -441,4 +477,391 @@ export interface AiStatsResponse {
   /** Completions per day (all variants). */
   daily: DailyCount[];
   totalCompletions: number;
+}
+
+// ─── Phase 7: thesis authoring tools ─────────────────────────────────────────
+
+export type AuditScope = 'file' | 'project';
+
+/** Per-file content overrides for unsaved buffers (path → live content). */
+export type FileOverrides = Record<string, string>;
+
+// Feature 1 — chapter-wide maths audit
+export type MathAuditVerdict = 'failing' | 'unknown' | 'passed';
+
+export interface AuditMathsRequest {
+  scope: AuditScope;
+  fileId?: string;
+  overrides?: FileOverrides;
+}
+
+export interface MathAuditBlock {
+  id: string;
+  file: string;
+  /** 1-based inclusive line span of the offending step/equation. */
+  lineStart: number;
+  lineEnd: number;
+  verdict: MathAuditVerdict;
+  method?: string;
+  counterexample?: MathCounterexample;
+  /** The equation / step LaTeX this row refers to. */
+  latex: string;
+  message?: string;
+  cached?: boolean;
+}
+
+export interface MathAuditReport {
+  blocks: MathAuditBlock[];
+  totals: { failing: number; unknown: number; passed: number; checked: number; cached: number };
+  /** Per-file unverified (failing + unknown) counts for gutter badges. */
+  byFile: Record<string, number>;
+}
+
+export interface ExplainStepRequest {
+  latex: string;
+  previousLatex?: string;
+  method?: string;
+  counterexample?: MathCounterexample;
+  /** The block's file + line, so the server can include surrounding context. */
+  file?: string;
+  line?: number;
+  /** Live editor buffers, so context reflects unsaved edits. */
+  overrides?: FileOverrides;
+}
+
+// Feature 2 — LaTeX-aware prose checking
+export type ProseSeverity = 'error' | 'warning' | 'info';
+
+export interface ProseRuleToggles {
+  spelling: boolean;
+  enGbConsistency: boolean;
+  hyphenation: boolean;
+  doubleSpace: boolean;
+  quotes: boolean;
+  languageTool: boolean;
+}
+
+export interface ProseCheckRequest {
+  scope: AuditScope;
+  fileId?: string;
+  rules?: Partial<ProseRuleToggles>;
+  overrides?: FileOverrides;
+}
+
+export interface ProseDiagnostic {
+  file: string;
+  line: number;
+  column: number;
+  endColumn?: number;
+  severity: ProseSeverity;
+  /** 'spelling' | 'en-gb' | 'double-space' | 'quotes' | 'hyphenation' | 'languagetool' */
+  rule: string;
+  message: string;
+  suggestions: string[];
+  /** The flagged token, for "add to dictionary" / safe apply. */
+  word?: string;
+}
+
+export interface ProseCheckReport {
+  diagnostics: ProseDiagnostic[];
+  /** Which engines ran, and whether everything stayed local (privacy assertion). */
+  engine: { spelling: string; grammar: string | null; local: boolean };
+  totals: { error: number; warning: number; info: number };
+}
+
+// Feature 3 — outline + cross-reference health
+export type OutlineKind = 'part' | 'chapter' | 'section' | 'subsection' | 'subsubsection';
+
+export interface OutlineLabel {
+  name: string;
+  line: number;
+}
+
+export interface OutlineNode {
+  id: string;
+  level: number;
+  kind: OutlineKind;
+  title: string;
+  file: string;
+  line: number;
+  labels: OutlineLabel[];
+  children: OutlineNode[];
+}
+
+export interface OutlineResponse {
+  roots: OutlineNode[];
+}
+
+export type XrefRule =
+  | 'undefined-ref'
+  | 'duplicate-label'
+  | 'missing-cite'
+  | 'unused-label'
+  | 'unlabelled-equation';
+
+export interface XrefDiagnostic {
+  file: string;
+  line: number;
+  severity: 'error' | 'info';
+  rule: XrefRule;
+  message: string;
+  key?: string;
+  /** All definition locations (for duplicate labels). */
+  locations?: { file: string; line: number }[];
+}
+
+export interface XrefReport {
+  diagnostics: XrefDiagnostic[];
+  totals: { error: number; info: number };
+}
+
+export interface ThesisRequest {
+  overrides?: FileOverrides;
+}
+
+// Combined pre-submit dashboard
+export interface PreSubmitSummary {
+  projectName: string;
+  generatedAt: string;
+  compile: { status: string; errors: number; warnings: number; durationMs: number | null };
+  maths: { failing: number; unknown: number; passed: number };
+  prose: { error: number; warning: number; info: number };
+  xref: { error: number; info: number };
+  ready: boolean;
+}
+
+// ─── Co-derivation engine (LLM proposes · SymPy verifies — SymPy is the arbiter) ─
+
+export type CoderiveIntent = 'fill-gap' | 'next-step' | 'reach-goal' | 'justify';
+
+export interface CoderiveAnchorRange {
+  /** Primary line: next-step cursor / reach-goal current / fill-gap line A / justify "from". */
+  fromLine: number;
+  /** Secondary line: fill-gap line C / justify "to". */
+  toLine?: number;
+}
+
+export interface CoderiveRequest {
+  fileId: string;
+  intent: CoderiveIntent;
+  anchorRange: CoderiveAnchorRange;
+  /** Target expression for "reach-goal". */
+  target?: string;
+  /** Live editor buffers so context + anchors reflect unsaved edits. */
+  overrides?: FileOverrides;
+}
+
+/** A raw LLM proposal — BEFORE SymPy renders any verdict. The LLM never decides correctness. */
+export interface CandidateProposal {
+  latex: string;
+  claimedEqualTo: string;
+  technique: string;
+  groundedIn: string[];
+  rationale: string;
+}
+
+/** verified = SymPy proved algebraic equivalence; unverified = SymPy refuted; unknown = SymPy could not decide. */
+export type CoderiveStatus = 'verified' | 'unverified' | 'unknown';
+
+export interface CoderiveCandidate {
+  latex: string;
+  status: CoderiveStatus;
+  /** The SymPy method that produced the verdict (e.g. "symbolic", "sample", "parse-error"). */
+  method: string;
+  counterexample?: MathCounterexample;
+  technique: string;
+  groundedIn: string[];
+  rationale: string;
+  claimedEqualTo: string;
+  retriesUsed: number;
+  /** True when groundedIn cites a key whose source text was NOT provided to the LLM. */
+  attributionUnverified: boolean;
+}
+
+export type ReferenceProvenance = 'full-text' | 'metadata-only' | 'not-found';
+
+export interface ReferenceContext {
+  key: string;
+  author?: string;
+  title?: string;
+  year?: string;
+  abstract?: string;
+  /** Best-matching passages from the cited work's source, when it is in the project. */
+  passages?: string[];
+  sourceFile?: string;
+  provenance: ReferenceProvenance;
+  /** Resolved via a linked Literature-library article (provenance "full-text (library)"). */
+  library?: boolean;
+}
+
+/** Full context handed to the LLM (server-internal; summarised for the UI). */
+export interface ContextBundle {
+  macros: Record<string, string>;
+  assumptions: string;
+  documentWindow: string;
+  references: ReferenceContext[];
+  intent: CoderiveIntent;
+  anchors: { from?: string; to?: string; goal?: string };
+}
+
+/** What the UI shows in the collapsible "context used" disclosure. */
+export interface ContextBundleSummary {
+  macroCount: number;
+  assumptions: string;
+  documentWindowChars: number;
+  windowPreview: string;
+  references: Array<{ key: string; provenance: ReferenceProvenance; sourceFile?: string; passageCount: number; library?: boolean }>;
+}
+
+// ─── Literature library (separate tree, wired into citation resolution) ──────
+
+export interface LibraryFolder {
+  id: string;
+  projectId: string;
+  parentId: string | null;
+  name: string;
+  createdAt: string;
+}
+
+export interface LiteratureItem {
+  id: string;
+  projectId: string;
+  folderId: string | null;
+  title: string;
+  authors: string;
+  year: string;
+  citeKey: string | null;
+  fileName: string;
+  fileSizeBytes: number;
+  doi: string | null;
+  abstract: string | null;
+  /** Whether extractedText is cached (i.e. the article's full text is available). */
+  hasText: boolean;
+  pageCount?: number;
+  extractedAt: string | null;
+  addedAt: string;
+}
+
+export interface LibraryTreeResponse {
+  folders: LibraryFolder[];
+  items: LiteratureItem[];
+  trashCount: number;
+}
+
+export interface TrashItem {
+  id: string;
+  kind: 'file' | 'folder' | 'literature';
+  label: string;
+  deletedAt: string;
+}
+
+/** Per-cite-key linkage indicator for the bibliography view + editor affordance. */
+export interface CiteLink {
+  citeKey: string;
+  linked: boolean;
+  /** linked AND extracted text available. */
+  hasText: boolean;
+  itemId?: string;
+  title?: string;
+}
+
+export interface CoderiveRound {
+  round: number;
+  proposalCount: number;
+  verdicts: Array<{ latex: string; status: CoderiveStatus; method: string; refutedReason?: string }>;
+}
+
+export interface CoderiveResponse {
+  intent: CoderiveIntent;
+  candidates: CoderiveCandidate[];
+  context: ContextBundleSummary;
+  rounds: CoderiveRound[];
+  anchors: { from?: string; to?: string; goal?: string };
+}
+
+// ─── Document Review (compose the engines → annotated review PDF) ─────────────
+
+export type ReviewAxis = 'maths' | 'literature' | 'background' | 'prose';
+
+/**
+ * Only `verified`/`refuted`/`verified-typo` are machine-established. The
+ * `llm-*` confidences are model judgements that may be wrong in either direction.
+ */
+export type ReviewConfidence =
+  | 'verified'
+  | 'refuted'
+  | 'unknown'
+  | 'llm-judgement'
+  | 'llm-judgement-low'
+  | 'verified-typo'
+  | 'llm-suggestion';
+
+export type ReviewSeverity = 'error' | 'warning' | 'info';
+
+export interface ReviewFinding {
+  id: string;
+  axis: ReviewAxis;
+  category: string;
+  severity: ReviewSeverity;
+  confidence: ReviewConfidence;
+  file: string;
+  lineSpan: { fromLine: number; toLine: number };
+  message: string;
+  suggestion?: string;
+  counterexample?: MathCounterexample;
+  /** Cite key the literature finding was checked against. */
+  reference?: string;
+  /** The reference span quoted/checked (literature axis). */
+  quotedSpan?: string;
+}
+
+export interface ReviewRequest {
+  scope: AuditScope;
+  fileId?: string;
+  /** Skip the LLM axes (2/3/4-prose) — deterministic maths + spelling only. */
+  deterministicOnly?: boolean;
+  overrides?: FileOverrides;
+}
+
+export interface ReviewTotals {
+  byAxis: Record<ReviewAxis, number>;
+  bySeverity: Record<ReviewSeverity, number>;
+  byConfidence: Partial<Record<ReviewConfidence, number>>;
+  /** Machine-verified algebra errors (the only "certain" red count). */
+  refutedMaths: number;
+}
+
+export interface ReviewResponse {
+  findings: ReviewFinding[];
+  totals: ReviewTotals;
+  /** Provenance of each cited reference the review resolved (for the "context used" disclosure). */
+  references: Array<{ key: string; provenance: ReferenceProvenance; sourceFile?: string; passageCount: number; library?: boolean }>;
+  /** URL of the annotated review PDF, when one was produced. */
+  reviewPdfUrl?: string;
+  /** True when findings were mapped onto the PDF and an annotated copy was written. */
+  annotated: boolean;
+  generatedAt: string;
+}
+
+/** Colour + human-readable confidence label, shared by the PDF annotator and the UI. */
+export interface ReviewStyle {
+  colour: string; // legend name
+  hex: string;
+  rgb: [number, number, number]; // 0–1, for PyMuPDF
+  label: string; // confidence in words
+  machineVerified: boolean;
+}
+
+export function reviewStyle(axis: ReviewAxis, confidence: ReviewConfidence): ReviewStyle {
+  if (axis === 'maths' && confidence === 'refuted')
+    return { colour: 'red', hex: '#ef4444', rgb: [0.94, 0.27, 0.27], label: 'SymPy-verified algebra error', machineVerified: true };
+  if (axis === 'maths')
+    return { colour: 'grey', hex: '#9ca3af', rgb: [0.61, 0.64, 0.69], label: 'SymPy could not decide (unknown) — not an error and not a pass', machineVerified: false };
+  if (axis === 'literature')
+    return { colour: 'orange', hex: '#f97316', rgb: [0.98, 0.45, 0.09], label: 'LLM judgement — verify against the cited source', machineVerified: false };
+  if (axis === 'background')
+    return { colour: 'purple', hex: '#a855f7', rgb: [0.66, 0.33, 0.97], label: 'LLM judgement, low confidence — verify against a real source', machineVerified: false };
+  if (confidence === 'verified-typo')
+    return { colour: 'blue', hex: '#3b82f6', rgb: [0.23, 0.51, 0.96], label: 'Deterministic spell-check (en-GB)', machineVerified: true };
+  return { colour: 'light yellow', hex: '#fde68a', rgb: [0.99, 0.9, 0.54], label: 'LLM prose suggestion — may be wrong', machineVerified: false };
 }

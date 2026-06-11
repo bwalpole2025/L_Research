@@ -24,13 +24,13 @@ function CodeBlock({ code }: { code: string }) {
   };
 
   return (
-    <div className="group relative my-2 overflow-hidden rounded border border-slate-200 dark:border-slate-700">
-      <div className="flex items-center justify-end gap-1 border-b border-slate-200 bg-slate-50 px-2 py-1 dark:border-slate-700 dark:bg-slate-800/60">
+    <div className="group relative my-2 overflow-hidden rounded-md border border-zinc-200 dark:border-zinc-800">
+      <div className="flex items-center justify-end gap-1 border-b border-zinc-200 bg-zinc-50 px-2 py-1 dark:border-zinc-800 dark:bg-zinc-900">
         <button
           type="button"
           onClick={() => insertAtCursor(code)}
           title="Insert at cursor"
-          className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-slate-600 hover:bg-slate-200 dark:text-slate-300 dark:hover:bg-slate-700"
+          className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium text-zinc-600 transition-colors hover:bg-zinc-200 dark:text-zinc-300 dark:hover:bg-zinc-800"
         >
           <CornerDownLeft className="h-3 w-3" /> Insert
         </button>
@@ -38,13 +38,13 @@ function CodeBlock({ code }: { code: string }) {
           type="button"
           onClick={() => void copy()}
           title="Copy"
-          className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-slate-600 hover:bg-slate-200 dark:text-slate-300 dark:hover:bg-slate-700"
+          className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium text-zinc-600 transition-colors hover:bg-zinc-200 dark:text-zinc-300 dark:hover:bg-zinc-800"
         >
           {copied ? <Check className="h-3 w-3 text-emerald-500" /> : <ClipboardCopy className="h-3 w-3" />}
           {copied ? 'Copied' : 'Copy'}
         </button>
       </div>
-      <pre className="overflow-x-auto bg-slate-900 p-3 text-xs leading-relaxed text-slate-100">
+      <pre className="overflow-x-auto bg-zinc-950 p-3 text-xs leading-relaxed text-zinc-100">
         <code>{code}</code>
       </pre>
     </div>
@@ -56,7 +56,7 @@ function CodeRenderer({ className, children }: React.ComponentPropsWithoutRef<'c
   const isBlock = /language-/.test(className ?? '') || text.includes('\n');
   if (!isBlock) {
     return (
-      <code className="rounded bg-slate-200 px-1 py-0.5 font-mono text-[0.85em] dark:bg-slate-700">
+      <code className="rounded bg-zinc-200 px-1 py-0.5 font-mono text-[0.85em] dark:bg-zinc-800">
         {children}
       </code>
     );

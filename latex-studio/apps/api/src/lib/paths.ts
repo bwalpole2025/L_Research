@@ -1,5 +1,20 @@
-/** Allowed file extensions for project files. */
-export const ALLOWED_EXTENSIONS = ['.tex', '.bib', '.sty', '.cls', '.txt'] as const;
+/** Text file extensions (stored utf8, editable). */
+export const TEXT_EXTENSIONS = ['.tex', '.bib', '.sty', '.cls', '.txt', '.md', '.csv'] as const;
+
+/** Binary file extensions (uploaded, stored base64 — figures, fonts, PDFs). */
+export const BINARY_EXTENSIONS = [
+  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tiff', '.tif', '.ico', '.svg',
+  '.pdf', '.eps', '.ps', '.ttf', '.otf', '.woff', '.woff2',
+] as const;
+
+/** All file extensions accepted by the project. */
+export const ALLOWED_EXTENSIONS = [...TEXT_EXTENSIONS, ...BINARY_EXTENSIONS] as const;
+
+/** True when a path's extension is a binary (non-text) type. */
+export function isBinaryPath(path: string): boolean {
+  const lower = path.toLowerCase();
+  return BINARY_EXTENSIONS.some((ext) => lower.endsWith(ext));
+}
 
 const SEGMENT = /^[A-Za-z0-9._ -]+$/;
 

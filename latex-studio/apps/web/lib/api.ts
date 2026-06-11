@@ -3,7 +3,20 @@ import type {
   AiModelsResponse,
   AiStatsResponse,
   AiStatus,
+  AuditScope,
   ChatContext,
+  CiteLink,
+  CoderiveRequest,
+  CoderiveResponse,
+  CoderiveRound,
+  DocumentModelResponse,
+  LibraryFolder,
+  LibraryTreeResponse,
+  LiteratureItem,
+  PredictGranularity,
+  PredictNextResponse,
+  ReviewResponse,
+  TrashItem,
   ChatMessage,
   ChatThread,
   CompileResponse,
@@ -13,17 +26,25 @@ import type {
   DerivationResult,
   EquivalenceRequest,
   EquivalenceResult,
+  FileOverrides,
   FixFromLogRequest,
   InlineEditRequest,
+  MathAuditReport,
+  MathCounterexample,
   MathParseRequest,
   MathParseResult,
+  OutlineResponse,
+  PreSubmitSummary,
   Project,
+  ProseCheckReport,
+  ProseRuleToggles,
   ReplacementResponse,
   SyncForwardRequest,
   SyncForwardResult,
   SyncInverseRequest,
   SyncInverseResult,
   TexFile,
+  XrefReport,
 } from '@latex-studio/shared';
 import type { FileMeta, SnapshotMeta } from './types';
 
@@ -117,8 +138,8 @@ export const api = {
   ) => request<Project>('PATCH', `/projects/${id}`, patch),
 
   listFiles: (projectId: string) => request<FileMeta[]>('GET', `/projects/${projectId}/files`),
-  createFile: (projectId: string, path: string, content?: string) =>
-    request<TexFile>('POST', `/projects/${projectId}/files`, { path, content }),
+  createFile: (projectId: string, path: string, content?: string, encoding?: 'utf8' | 'base64') =>
+    request<TexFile>('POST', `/projects/${projectId}/files`, { path, content, ...(encoding ? { encoding } : {}) }),
   getFile: (fileId: string) => request<TexFile>('GET', `/files/${fileId}`),
   updateFile: (fileId: string, patch: { content?: string; path?: string }) =>
     request<TexFile>('PATCH', `/files/${fileId}`, patch),
@@ -159,7 +180,211 @@ export const api = {
   aiFix: (projectId: string, req: FixFromLogRequest) =>
     aiRequest<ReplacementResponse>('POST', `/projects/${projectId}/fix`, req),
   getAiStats: () => request<AiStatsResponse>('GET', '/ai/stats'),
+
+  // Phase 7 — thesis tools.
+  auditMaths: (projectId: string, body: { scope: AuditScope; fileId?: string; overrides?: FileOverrides }) =>
+    request<MathAuditReport>('POST', `/projects/${projectId}/audit-maths`, body),
+  getOutline: (projectId: string, overrides?: FileOverrides) =>
+    request<OutlineResponse>('POST', `/projects/${projectId}/outline`, { overrides }),
+  getXref: (projectId: string, overrides?: FileOverrides) =>
+    request<XrefReport>('POST', `/projects/${projectId}/xref`, { overrides }),
+  proseCheck: (
+    projectId: string,
+    body: { scope: AuditScope; fileId?: string; rules?: Partial<ProseRuleToggles>; overrides?: FileOverrides },
+  ) => request<ProseCheckReport>('POST', `/projects/${projectId}/prose-check`, body),
+  getDictionary: (projectId: string) =>
+    request<{ customWords: string[] }>('GET', `/projects/${projectId}/dictionary`),
+  review: (
+    projectId: string,
+    body: { scope: AuditScope; fileId?: string; deterministicOnly?: boolean; overrides?: FileOverrides },
+  ) => request<ReviewResponse>('POST', `/projects/${projectId}/review`, body),
+
+  // Literature library.
+  getLibrary: (projectId: string) => request<LibraryTreeResponse>('GET', `/projects/${projectId}/library`),
+  searchLibrary: (projectId: string, q: string) =>
+    request<{ items: LiteratureItem[] }>('GET', `/projects/${projectId}/library/search?q=${encodeURIComponent(q)}`),
+  getCiteKeys: (projectId: string) => request<{ keys: string[] }>('GET', `/projects/${projectId}/library/cite-keys`),
+  getCiteLinks: (projectId: string) => request<{ links: CiteLink[] }>('GET', `/projects/${projectId}/library/links`),
+  createLibFolder: (projectId: string, name: string, parentId?: string | null) =>
+    request<LibraryFolder>('POST', `/projects/${projectId}/library/folders`, { name, parentId: parentId ?? null }),
+  renameLibFolder: (folderId: string, body: { name?: string; parentId?: string | null }) =>
+    request<LibraryFolder>('PATCH', `/library/folders/${folderId}`, body),
+  deleteLibFolder: (folderId: string) => request<{ trashedItems: number }>('DELETE', `/library/folders/${folderId}`),
+  uploadLibItem: (projectId: string, body: { fileName: string; fileBase64: string; folderId?: string | null }) =>
+    request<LiteratureItem>('POST', `/projects/${projectId}/library/items`, body),
+  importBib: (projectId: string, bibContent: string, folderId?: string | null) =>
+    request<{ items: LiteratureItem[] }>('POST', `/projects/${projectId}/library/import-bib`, { bibContent, folderId: folderId ?? null }),
+  patchLibItem: (
+    itemId: string,
+    body: Partial<{ title: string; authors: string; year: string; citeKey: string | null; doi: string | null; abstract: string | null; folderId: string | null }>,
+  ) => request<LiteratureItem>('PATCH', `/library/items/${itemId}`, body),
+  extractLibItem: (itemId: string) => request<LiteratureItem>('POST', `/library/items/${itemId}/extract`, {}),
+  linkLibItem: (itemId: string, citeKey: string) => request<LiteratureItem>('POST', `/library/items/${itemId}/link`, { citeKey }),
+  generateBib: (itemId: string) => request<{ item: LiteratureItem; citeKey: string }>('POST', `/library/items/${itemId}/generate-bib`, {}),
+  enrichLibItem: (itemId: string) => request<LiteratureItem>('POST', `/library/items/${itemId}/enrich`, {}),
+  deleteLibItem: (itemId: string) => request<{ ok: boolean }>('DELETE', `/library/items/${itemId}`),
+  libItemPdfUrl: (itemId: string) => `/api/library/items/${itemId}/pdf`,
+
+  // Document-aware prediction.
+  documentModel: (projectId: string, body: { cursorFile?: string; cursorLine?: number; headingNote?: boolean; overrides?: FileOverrides }) =>
+    request<DocumentModelResponse>('POST', `/projects/${projectId}/document-model`, body),
+  predictNext: (
+    projectId: string,
+    body: { fileId: string; cursorLine: number; granularity: PredictGranularity; card?: string; position?: string; model?: string; overrides?: FileOverrides },
+  ) => aiRequest<PredictNextResponse>('POST', `/projects/${projectId}/predict-next`, body),
+  getTrash: (projectId: string) => request<{ items: TrashItem[] }>('GET', `/projects/${projectId}/trash`),
+  restoreTrash: (projectId: string, trashId: string) => request<{ ok: boolean }>('POST', `/projects/${projectId}/trash/${trashId}/restore`, {}),
+  emptyTrash: (projectId: string) => request<{ removed: number }>('DELETE', `/projects/${projectId}/trash`),
+  updateDictionary: (projectId: string, word: string, remove?: boolean) =>
+    request<{ customWords: string[] }>('POST', `/projects/${projectId}/dictionary`, {
+      word,
+      ...(remove ? { remove: true } : {}),
+    }),
+  preSubmit: (projectId: string, overrides?: FileOverrides) =>
+    request<PreSubmitSummary>('POST', `/projects/${projectId}/pre-submit`, { overrides }),
 };
+
+/** Stream a "why doesn't this step follow" explanation (SSE), token by token. */
+export async function streamExplainStep(
+  projectId: string,
+  body: {
+    latex: string;
+    previousLatex?: string;
+    method?: string;
+    counterexample?: MathCounterexample;
+    file?: string;
+    line?: number;
+    overrides?: FileOverrides;
+  },
+  handlers: { onToken: (t: string) => void; onDone: () => void; onError: (kind: AiErrorKind, message: string) => void },
+  signal?: AbortSignal,
+): Promise<void> {
+  const init: RequestInit = {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  };
+  if (signal) init.signal = signal;
+
+  let res: Response;
+  try {
+    res = await fetch(`/api/projects/${projectId}/explain-step`, init);
+  } catch {
+    handlers.onError('unavailable', 'Could not reach the AI service.');
+    return;
+  }
+  if (!res.ok || !res.body) {
+    let kind: AiErrorKind = 'other';
+    let message = res.statusText;
+    try {
+      const data = (await res.json()) as { error?: string; kind?: AiErrorKind };
+      if (data.kind) kind = data.kind;
+      if (data.error) message = data.error;
+    } catch {
+      /* non-JSON */
+    }
+    handlers.onError(kind, message);
+    return;
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let idx: number;
+    while ((idx = buffer.indexOf('\n\n')) !== -1) {
+      const block = buffer.slice(0, idx);
+      buffer = buffer.slice(idx + 2);
+      const event = /event: (.*)/.exec(block)?.[1];
+      const dataLine = /data: (.*)/.exec(block)?.[1];
+      if (!event || dataLine === undefined) continue;
+      let data: unknown;
+      try {
+        data = JSON.parse(dataLine);
+      } catch {
+        continue;
+      }
+      if (event === 'token') handlers.onToken((data as { text: string }).text);
+      else if (event === 'done') handlers.onDone();
+      else if (event === 'error') {
+        const e = data as { kind: AiErrorKind; message: string };
+        handlers.onError(e.kind, e.message);
+      }
+    }
+  }
+}
+
+/** Run the co-derivation engine (SSE): per-round progress, then the final result. */
+export async function streamCoderive(
+  projectId: string,
+  body: CoderiveRequest,
+  handlers: {
+    onRound: (r: CoderiveRound) => void;
+    onResult: (r: CoderiveResponse) => void;
+    onError: (kind: AiErrorKind, message: string) => void;
+  },
+  signal?: AbortSignal,
+): Promise<void> {
+  const init: RequestInit = {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  };
+  if (signal) init.signal = signal;
+
+  let res: Response;
+  try {
+    res = await fetch(`/api/projects/${projectId}/coderive`, init);
+  } catch {
+    handlers.onError('unavailable', 'Could not reach the AI service.');
+    return;
+  }
+  if (!res.ok || !res.body) {
+    let kind: AiErrorKind = 'other';
+    let message = res.statusText;
+    try {
+      const data = (await res.json()) as { error?: string; kind?: AiErrorKind };
+      if (data.kind) kind = data.kind;
+      if (data.error) message = data.error;
+    } catch {
+      /* non-JSON */
+    }
+    handlers.onError(kind, message);
+    return;
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let idx: number;
+    while ((idx = buffer.indexOf('\n\n')) !== -1) {
+      const block = buffer.slice(0, idx);
+      buffer = buffer.slice(idx + 2);
+      const event = /event: (.*)/.exec(block)?.[1];
+      const dataLine = /data: (.*)/.exec(block)?.[1];
+      if (!event || dataLine === undefined) continue;
+      let data: unknown;
+      try {
+        data = JSON.parse(dataLine);
+      } catch {
+        continue;
+      }
+      if (event === 'round') handlers.onRound(data as CoderiveRound);
+      else if (event === 'result') handlers.onResult(data as CoderiveResponse);
+      else if (event === 'error') {
+        const e = data as { kind: AiErrorKind; message: string };
+        handlers.onError(e.kind, e.message);
+      }
+    }
+  }
+}
 
 /** Request an inline completion, cancellable via `signal`. Throws `AiError`. */
 export async function completeCode(

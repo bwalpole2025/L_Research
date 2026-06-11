@@ -26,10 +26,80 @@ model Project {
   model          String @default("claude-sonnet-4-6")
   aiInstructions String @default("")
 
+  // Prose-check per-project custom dictionary (domain terms, names).
+  customWords String[] @default([])
+
   files       TexFile[]
   compileLogs CompileLog[]
   snapshots   Snapshot[]
   chatThreads ChatThread[]
+  folders     Folder[]
+  literature  LiteratureItem[]
+  trash       TrashEntry[]
+}
+
+// Hierarchical folders for BOTH trees (one mechanism). `tree` distinguishes the
+// source file tree from the literature library tree.
+enum FolderTree {
+  source
+  literature
+}
+
+model Folder {
+  id        String     @id @default(cuid())
+  projectId String
+  parentId  String?
+  name      String
+  tree      FolderTree
+  createdAt DateTime   @default(now())
+
+  project  Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  parent   Folder?          @relation("FolderChildren", fields: [parentId], references: [id], onDelete: Cascade)
+  children Folder[]         @relation("FolderChildren")
+  items    LiteratureItem[]
+
+  // Prevent sibling name collisions (NULL parent collisions are also checked in the route).
+  @@unique([projectId, tree, parentId, name])
+  @@index([projectId, tree])
+}
+
+// A library article: metadata + a pointer to the PDF on the compile-workspace
+// volume. PDF bytes are NEVER stored in Postgres.
+model LiteratureItem {
+  id            String    @id @default(cuid())
+  projectId     String
+  folderId      String?
+  title         String    @default("")
+  authors       String    @default("")
+  year          String    @default("")
+  citeKey       String?
+  fileName      String    @default("")
+  storagePath   String    @default("")
+  fileSizeBytes Int       @default(0)
+  doi           String?
+  abstract      String?
+  extractedText String?
+  extractedAt   DateTime?
+  addedAt       DateTime  @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  folder  Folder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
+
+  @@index([projectId])
+  @@index([projectId, citeKey])
+}
+
+// Soft-delete: deletes go here, not oblivion. payload holds enough to restore.
+model TrashEntry {
+  id        String   @id @default(cuid())
+  projectId String
+  kind      String // 'file' | 'folder' | 'literature'
+  payload   Json
+  deletedAt DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
 }
 
 // Chat transcript — WE own it (source of truth), replayed to the provider per
@@ -81,7 +151,12 @@ model TexFile {
   id        String   @id @default(cuid())
   projectId String
   path      String
+  // Nullable → root of the source tree. Prep for the source-tree folderId
+  // migration; the path column remains the source of truth for compile/SyncTeX.
+  folderId  String?
   content   String   @default("")
+  // "utf8" for text, "base64" for uploaded binary files (figures, fonts, PDFs).
+  encoding  String   @default("utf8")
   updatedAt DateTime @updatedAt
 
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)

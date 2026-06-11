@@ -4,7 +4,10 @@ import type { CompletionInlineRequest, CompletionMode } from '@latex-studio/shar
 export const COMPLETION_SYSTEM_PROMPT =
   'You are an inline completion engine for LaTeX documents. ' +
   'Output ONLY the text to insert at <CURSOR>. No commentary, no fences, no repetition of existing text. ' +
-  "Match the author's notation, macros, and register exactly.";
+  "Match the author's notation, macros, and register exactly. " +
+  "When a context card is provided, use the document's own macros, symbols, and notation from it — reuse macros " +
+  '(e.g. \\Bo) rather than re-expanding them, and reuse established terms and symbol names. ' +
+  'Predict what THIS document is likely to say next, not generic text.';
 
 /** Soft output caps per mode (the SDK exposes no response max_tokens). */
 export const TOKEN_CAPS: Record<CompletionMode, number> = {
@@ -24,16 +27,19 @@ const MODE_REMINDER: Record<CompletionMode, string> = {
     'Context: the document preamble (before \\begin{document}). Complete the package/command/setup line.',
 };
 
-/** Build the per-completion user prompt (mode reminder + soft cap + context). */
+/** Build the per-completion user prompt (mode reminder + soft cap + document card + context). */
 export function buildCompletionUserPrompt(req: CompletionInlineRequest): string {
   const cap = TOKEN_CAPS[req.mode];
-  return [
-    MODE_REMINDER[req.mode],
+  const lines: string[] = [MODE_REMINDER[req.mode]];
+  if (req.contextCard?.trim()) lines.push(`Document context card (reuse its notation):\n${req.contextCard.trim()}`);
+  if (req.position?.trim()) lines.push(`Cursor position: ${req.position.trim()}.`);
+  lines.push(
     `Output at most ~${cap} tokens, and only the text to insert — never repeat surrounding text.`,
     'Document with the insertion point marked <CURSOR>:',
     `${req.prefix}<CURSOR>${req.suffix ?? ''}`,
     'Text to insert at <CURSOR>:',
-  ].join('\n');
+  );
+  return lines.join('\n');
 }
 
 /**

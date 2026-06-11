@@ -1,0 +1,4 @@
+# pnpm store + deps that live at the repo root
+.pnpm-store/
+node_modules/
+.DS_Store

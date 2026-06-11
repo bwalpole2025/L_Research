@@ -25,11 +25,13 @@ import { search, searchKeymap, highlightSelectionMatches } from '@codemirror/sea
 import type { CursorState, MathLineMarker, PendingReveal, Theme } from '@/lib/types';
 import { editorController } from '@/lib/editorController';
 import { CompletionController } from '@/lib/completion/controller';
+import { useDocumentModelStore } from '@/lib/documentModelStore';
 import { latexLanguageSupport, latexSnippets, beginEndCloser } from './latex';
 import { editorTheme } from './theme';
 import { flashField, setFlash } from './flash';
 import { mathGutter, setMathMarkers } from './mathGutter';
 import { inlineSuggestion } from './inlineSuggest';
+import { predictBlockExtension } from './predictBlock';
 
 export interface CodeEditorProps {
   fileId: string | null;
@@ -108,8 +110,17 @@ export function CodeEditor(props: CodeEditorProps) {
       flashField,
       mathGutter(),
       inlineSuggestion(completion.current!.config),
+      predictBlockExtension(completion.current!.predictConfig),
       EditorView.lineWrapping,
       keymap.of([
+        {
+          key: 'Mod-Shift- ',
+          preventDefault: true,
+          run: () => {
+            void completion.current?.triggerPredict();
+            return true;
+          },
+        },
         {
           key: 'Mod-s',
           preventDefault: true,
@@ -180,10 +191,13 @@ export function CodeEditor(props: CodeEditorProps) {
     editorController.setView(view);
     completion.current?.setView(view);
     const controller = completion.current;
+    useDocumentModelStore.getState().setPredictTrigger(() => void controller?.triggerPredict());
+    void useDocumentModelStore.getState().refresh();
     return () => {
       editorController.setView(null);
       controller?.setView(null);
       controller?.scheduler.abort();
+      useDocumentModelStore.getState().setPredictTrigger(null);
       view.destroy();
       viewRef.current = null;
       stateCache.clear();

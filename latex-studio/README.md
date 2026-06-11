@@ -72,6 +72,52 @@ Python service that verifies math with SymPy.
   counterexample for any failing step. Per-project macros and default
   assumptions live in Project settings. See
   [services/mathcheck/README.md](services/mathcheck/README.md).
+- **Thesis tools (Phase 7):** read-only authoring checks, surfaced as panels.
+  - **Audit maths** sweeps every display-math block (file or whole project)
+    through `mathcheck` and reports failing/unknown steps first (passed
+    collapsed), with counterexamples, jump-to-line, a per-file "unverified"
+    badge, and **Explain with Claude** on a failing row (read-only). A
+    normalised-equation cache makes re-audits after unrelated edits instant.
+  - **Prose check** is LaTeX-aware spelling (en-GB, `nspell`) + consistency
+    lints, **fully local** — it ignores commands, math, labels/cites, verbatim,
+    comments, and the preamble. Per-project custom dictionary; optional local
+    LanguageTool container for grammar (no text leaves the machine).
+  - **Outline + references** — a live multi-file outline (jump + current-section
+    highlight + nested labels) and cross-reference health (undefined `\ref`,
+    duplicate `\label`, `\cite` with no `.bib`, unused labels, un-labelled
+    equations).
+  - **Pre-submit check** runs all of the above plus the compile into a
+    one-screen dashboard you can export as Markdown.
+
+  All three are read-only except where a diagnostic offers an explicit
+  apply/accept, which uses the diff-and-accept flow. Press <kbd>⌘/Ctrl + /</kbd>
+  for the keyboard reference. See [docs/runbook.md](docs/runbook.md) and
+  `docs/decisions.md` ADR-007.
+- **Co-derive — the LLM proposes, SymPy decides:** <kbd>⌘/Ctrl + ⇧ + D</kbd> or
+  the toolbar. Four intents (fill-gap, next-step, reach-goal, justify). The model
+  proposes candidate steps as structured JSON with full document + reference
+  context (macros, assumptions, surrounding derivation, and cited works graded by
+  provenance — `.bib` metadata always, extracted source text when the `.tex`/PDF
+  is in the project, **never the web**); the `mathcheck` SymPy service then
+  verifies **every** proposal. SymPy is the sole arbiter — refuted steps are fed
+  the counterexample and re-proposed (≤3 rounds), and only a verified step inserts
+  cleanly. A ✓ means *algebraic equivalence under the stated assumptions and
+  nothing more* — not modelling correctness, not the asymptotics, not citation
+  accuracy (cited attributions are flagged "attribution unverified"). `unknown` is
+  the honest default and is never upgraded. See `docs/decisions.md` ADR-008.
+- **Document Review — one command → an annotated review PDF.** Composes the
+  engines into findings on four axes: **maths** (SymPy, the only certain axis —
+  refuted/unknown), **literature consistency** (LLM vs in-project reference text,
+  with provenance), **background knowledge** (LLM vs well-known results, low
+  confidence), and **prose** (deterministic en-GB spelling + LLM wording). Each
+  finding is mapped onto PDF coordinates via SyncTeX and written as a colour-coded
+  highlight (with popup) into `<root>.review.pdf` by PyMuPDF, plus a **legend**
+  page and an **index** with internal links to every highlight. The right pane
+  gets a **Clean / Review** toggle; the Review panel lists the same findings
+  (filter by axis, click to jump the PDF **and** the editor, "Explain" opens a
+  scoped chat). Honesty contract: only **red** (algebra) and **blue** (spelling)
+  are machine-verified; orange/purple/yellow are LLM judgements to check. No red
+  ≠ correct. Optional "Review on compile". See `docs/decisions.md` ADR-009.
 
 The browser talks only to `api`, always with the shared bearer token. `api` is
 bound to localhost and is the only component holding secrets.
@@ -199,6 +245,7 @@ All configuration is via `.env` (documented in [`.env.example`](.env.example)):
 | `DATABASE_URL`      | Prisma, host-run api            | Points at the dockerized Postgres on localhost.    |
 | `MODEL_PROVIDER`    | api (AI)                        | `agent-sdk` (default, subscription) or `api` (stub). |
 | `MODEL`             | api (AI)                        | Default chat/edit model; per-project override in Settings. |
+| `LANGUAGETOOL_URL`  | api (prose check)               | Optional local LanguageTool container; unset ⇒ spelling + lints only. |
 | `API_BEARER_TOKEN`  | api (auth), web → api           | Required; `docker compose` fails fast if unset.    |
 | `MATHCHECK_URL`     | api                             | Host-run api uses localhost; the container uses the service name. |
 | `TEXLIVE_MODE`      | api                             | `docker` (texlive container) or `local` (host latexmk). |

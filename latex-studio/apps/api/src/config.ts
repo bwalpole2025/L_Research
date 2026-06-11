@@ -51,6 +51,8 @@ export interface AppConfig {
   completionsWarm: boolean;
   /** Idle timeout (ms) before a project's warm completion pool is killed. */
   completionWarmIdleMs: number;
+  /** URL of a LOCAL LanguageTool container for prose grammar/style (optional). */
+  languageToolUrl: string;
   /** Postgres connection string (used by Prisma). */
   databaseUrl: string;
 }
@@ -76,6 +78,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     completionModel: env.COMPLETION_MODEL ?? DEFAULT_COMPLETION_MODEL,
     completionsWarm: env.COMPLETIONS_WARM !== 'false',
     completionWarmIdleMs: Number.parseInt(env.COMPLETION_WARM_IDLE_MS ?? '600000', 10),
+    languageToolUrl: env.LANGUAGETOOL_URL ?? '',
     databaseUrl: env.DATABASE_URL ?? '',
   };
 }

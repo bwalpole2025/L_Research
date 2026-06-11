@@ -1,13 +1,14 @@
 import type { FastifyInstance } from 'fastify';
 import { Prisma } from '@prisma/client';
 import { z } from 'zod';
-import { validateFilePath } from '../lib/paths.js';
+import { isBinaryPath, validateFilePath } from '../lib/paths.js';
 
 function serialiseFile(f: {
   id: string;
   projectId: string;
   path: string;
   content: string;
+  encoding: string;
   updatedAt: Date;
 }) {
   return {
@@ -15,6 +16,7 @@ function serialiseFile(f: {
     projectId: f.projectId,
     path: f.path,
     content: f.content,
+    encoding: f.encoding,
     updatedAt: f.updatedAt.toISOString(),
   };
 }
@@ -22,6 +24,7 @@ function serialiseFile(f: {
 const createFileBody = z.object({
   path: z.string(),
   content: z.string().optional(),
+  encoding: z.enum(['utf8', 'base64']).optional(),
 });
 
 // At least one of path/content must be present on a PATCH.
@@ -48,12 +51,13 @@ export async function fileRoutes(app: FastifyInstance): Promise<void> {
     const files = await app.prisma.texFile.findMany({
       where: { projectId: project.id },
       orderBy: { path: 'asc' },
-      select: { id: true, projectId: true, path: true, updatedAt: true },
+      select: { id: true, projectId: true, path: true, encoding: true, updatedAt: true },
     });
     return files.map((f) => ({
       id: f.id,
       projectId: f.projectId,
       path: f.path,
+      encoding: f.encoding,
       updatedAt: f.updatedAt.toISOString(),
     }));
   });
@@ -71,12 +75,20 @@ export async function fileRoutes(app: FastifyInstance): Promise<void> {
     const check = validateFilePath(parsed.data.path);
     if (!check.ok) return reply.code(400).send({ error: check.error });
 
+    // Binary files must arrive explicitly base64; text files are always utf8.
+    const binary = isBinaryPath(parsed.data.path);
+    if (binary && parsed.data.encoding !== 'base64') {
+      return reply.code(400).send({ error: 'binary files must be uploaded with base64 encoding' });
+    }
+    const encoding = binary ? 'base64' : 'utf8';
+
     try {
       const file = await app.prisma.texFile.create({
         data: {
           projectId: project.id,
           path: parsed.data.path,
           content: parsed.data.content ?? '',
+          encoding,
         },
       });
       return reply.code(201).send(serialiseFile(file));

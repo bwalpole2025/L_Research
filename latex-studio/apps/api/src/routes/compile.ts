@@ -49,7 +49,7 @@ export async function compileRoutes(app: FastifyInstance): Promise<void> {
 
     const files = await app.prisma.texFile.findMany({
       where: { projectId: project.id },
-      select: { path: true, content: true },
+      select: { path: true, content: true, encoding: true },
     });
 
     const result = await svc.compile({

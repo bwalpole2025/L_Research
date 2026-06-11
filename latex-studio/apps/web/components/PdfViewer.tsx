@@ -13,6 +13,7 @@ import {
   ZoomOut,
 } from 'lucide-react';
 import { useEditorStore } from '@/lib/store';
+import { useReviewStore } from '@/lib/reviewStore';
 
 type PdfMode = 'light' | 'dim' | 'invert';
 
@@ -21,6 +22,11 @@ const MODE_FILTER: Record<PdfMode, string> = {
   dim: 'brightness(0.86) contrast(1.02)',
   invert: 'invert(0.92) hue-rotate(180deg)',
 };
+
+const pdfButton =
+  'inline-flex h-7 w-7 items-center justify-center rounded-md text-zinc-500 transition-colors hover:bg-zinc-200 hover:text-zinc-950 disabled:pointer-events-none disabled:opacity-35 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-50';
+const pdfPrimaryButton =
+  'inline-flex h-7 items-center gap-1.5 rounded-md bg-zinc-950 px-2.5 text-xs font-medium text-white transition-colors hover:bg-zinc-800 disabled:pointer-events-none disabled:opacity-50 dark:bg-white dark:text-zinc-950 dark:hover:bg-zinc-200';
 
 interface Highlight {
   page: number;
@@ -45,6 +51,17 @@ async function loadPdfjs() {
 
 export function PdfViewer() {
   const pdfUrl = useEditorStore((s) => s.pdfUrl);
+  const reviewMode = useReviewStore((s) => s.pdfMode);
+  const reviewPdfUrl = useReviewStore((s) => s.reviewPdfUrl);
+  const literaturePdfUrl = useReviewStore((s) => s.literaturePdfUrl);
+  const literatureTitle = useReviewStore((s) => s.literatureTitle);
+  const setReviewMode = useReviewStore((s) => s.setPdfMode);
+  const effectiveUrl =
+    reviewMode === 'literature' && literaturePdfUrl
+      ? literaturePdfUrl
+      : reviewMode === 'review' && reviewPdfUrl
+        ? reviewPdfUrl
+        : pdfUrl;
   const compiling = useEditorStore((s) => s.compiling);
   const theme = useEditorStore((s) => s.theme);
   const forwardHighlight = useEditorStore((s) => s.forwardHighlight);
@@ -122,14 +139,14 @@ export function PdfViewer() {
 
   // Load the document whenever the PDF URL changes.
   useEffect(() => {
-    if (!pdfUrl) {
+    if (!effectiveUrl) {
       setNumPages(0);
       return;
     }
     let cancelled = false;
     void (async () => {
       const pdfjs = await loadPdfjs();
-      const task = pdfjs.getDocument({ url: pdfUrl, disableRange: true, disableStream: true });
+      const task = pdfjs.getDocument({ url: effectiveUrl, disableRange: true, disableStream: true });
       try {
         const doc = await task.promise;
         if (cancelled) {
@@ -150,7 +167,7 @@ export function PdfViewer() {
     return () => {
       cancelled = true;
     };
-  }, [pdfUrl]);
+  }, [effectiveUrl]);
 
   // Re-render pages when the page set, scale, or document changes.
   useEffect(() => {
@@ -226,22 +243,60 @@ export function PdfViewer() {
     setScale((s) => Math.max(0.3, Math.min(4, Math.round((s + delta) * 100) / 100)));
   };
 
-  const hasPdf = Boolean(pdfUrl) && numPages > 0;
+  const hasPdf = Boolean(effectiveUrl) && numPages > 0;
 
   return (
-    <div className="flex h-full flex-col bg-slate-100 dark:bg-slate-900/40">
-      {/* Header / controls */}
-      <div className="flex items-center gap-1 border-b border-slate-200 bg-slate-50 px-2 py-1 text-xs dark:border-slate-800 dark:bg-slate-900">
+    <div className="flex h-full flex-col bg-zinc-100 dark:bg-zinc-950">
+      <div className="flex h-10 items-center gap-1 border-b border-zinc-200 bg-[var(--ls-surface-muted)] px-2 text-xs dark:border-zinc-800">
+        {reviewMode === 'literature' && literaturePdfUrl && (
+          <>
+            <button
+              type="button"
+              data-testid="pdf-back-clean"
+              onClick={() => setReviewMode('clean')}
+              className="rounded-md border border-zinc-200 px-2 py-1 text-[11px] font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300"
+            >
+              ← Clean
+            </button>
+            <span className="max-w-48 truncate text-[11px] font-medium text-zinc-500 dark:text-zinc-400" title={literatureTitle ?? ''}>
+              📄 {literatureTitle ?? 'Article'}
+            </span>
+            <div className="mx-1 h-5 w-px bg-zinc-200 dark:bg-zinc-800" />
+          </>
+        )}
+        {reviewMode !== 'literature' && reviewPdfUrl && (
+          <>
+            <div className="flex overflow-hidden rounded-md border border-zinc-200 dark:border-zinc-700" role="tablist">
+              <button
+                type="button"
+                data-testid="pdf-clean"
+                onClick={() => setReviewMode('clean')}
+                className={`px-2 py-1 text-[11px] font-medium ${reviewMode === 'clean' ? 'bg-blue-600 text-white' : 'bg-white text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300'}`}
+              >
+                Clean
+              </button>
+              <button
+                type="button"
+                data-testid="pdf-review"
+                onClick={() => setReviewMode('review')}
+                className={`px-2 py-1 text-[11px] font-medium ${reviewMode === 'review' ? 'bg-blue-600 text-white' : 'bg-white text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300'}`}
+              >
+                Review
+              </button>
+            </div>
+            <div className="mx-1 h-5 w-px bg-zinc-200 dark:bg-zinc-800" />
+          </>
+        )}
         <button
           type="button"
           aria-label="Previous page"
           disabled={!hasPdf || currentPage <= 1}
           onClick={() => goToPage(currentPage - 1)}
-          className="rounded p-1 hover:bg-slate-200 disabled:opacity-40 dark:hover:bg-slate-800"
+          className={pdfButton}
         >
           <ChevronLeft className="h-4 w-4" />
         </button>
-        <span className="tabular-nums text-slate-500 dark:text-slate-400">
+        <span className="min-w-12 text-center font-medium tabular-nums text-zinc-500 dark:text-zinc-400">
           {hasPdf ? `${currentPage} / ${numPages}` : '– / –'}
         </span>
         <button
@@ -249,23 +304,23 @@ export function PdfViewer() {
           aria-label="Next page"
           disabled={!hasPdf || currentPage >= numPages}
           onClick={() => goToPage(currentPage + 1)}
-          className="rounded p-1 hover:bg-slate-200 disabled:opacity-40 dark:hover:bg-slate-800"
+          className={pdfButton}
         >
           <ChevronRight className="h-4 w-4" />
         </button>
 
-        <div className="mx-1 h-4 w-px bg-slate-300 dark:bg-slate-700" />
+        <div className="mx-1 h-5 w-px bg-zinc-200 dark:bg-zinc-800" />
 
         <button
           type="button"
           aria-label="Zoom out"
           disabled={!hasPdf}
           onClick={() => zoom(-0.2)}
-          className="rounded p-1 hover:bg-slate-200 disabled:opacity-40 dark:hover:bg-slate-800"
+          className={pdfButton}
         >
           <ZoomOut className="h-4 w-4" />
         </button>
-        <span className="w-10 text-center tabular-nums text-slate-500 dark:text-slate-400">
+        <span className="w-11 text-center font-medium tabular-nums text-zinc-500 dark:text-zinc-400">
           {Math.round(scale * 100)}%
         </span>
         <button
@@ -273,7 +328,7 @@ export function PdfViewer() {
           aria-label="Zoom in"
           disabled={!hasPdf}
           onClick={() => zoom(0.2)}
-          className="rounded p-1 hover:bg-slate-200 disabled:opacity-40 dark:hover:bg-slate-800"
+          className={pdfButton}
         >
           <ZoomIn className="h-4 w-4" />
         </button>
@@ -283,8 +338,8 @@ export function PdfViewer() {
           title="Fit width"
           disabled={!hasPdf}
           onClick={() => setFitWidth(true)}
-          className={`rounded p-1 hover:bg-slate-200 disabled:opacity-40 dark:hover:bg-slate-800 ${
-            fitWidth ? 'text-sky-600 dark:text-sky-400' : ''
+          className={`${pdfButton} ${
+            fitWidth ? 'bg-blue-50 text-blue-600 dark:bg-blue-500/15 dark:text-blue-300' : ''
           }`}
         >
           <Maximize className="h-4 w-4" />
@@ -295,7 +350,7 @@ export function PdfViewer() {
             aria-label="PDF color mode"
             value={mode}
             onChange={(e) => setMode(e.target.value as PdfMode)}
-            className="rounded border border-slate-300 bg-transparent px-1 py-0.5 text-xs dark:border-slate-700"
+            className="h-7 rounded-md border border-zinc-200 bg-white px-2 text-xs font-medium text-zinc-700 outline-none transition-colors hover:border-zinc-300 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:border-zinc-700"
           >
             <option value="light">Light page</option>
             <option value="dim">Dimmed</option>
@@ -306,7 +361,7 @@ export function PdfViewer() {
             title="Locate cursor in PDF"
             disabled={!hasPdf}
             onClick={() => void locateInPdf()}
-            className="rounded p-1 hover:bg-slate-200 disabled:opacity-40 dark:hover:bg-slate-800"
+            className={pdfButton}
           >
             <Crosshair className="h-4 w-4" />
           </button>
@@ -314,7 +369,7 @@ export function PdfViewer() {
             type="button"
             onClick={() => void compileProject()}
             disabled={compiling}
-            className="inline-flex items-center gap-1 rounded bg-slate-900 px-2 py-1 text-xs font-medium text-white hover:bg-slate-700 disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white"
+            className={pdfPrimaryButton}
           >
             {compiling ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
             Compile
@@ -326,26 +381,23 @@ export function PdfViewer() {
       <div
         ref={containerRef}
         onScroll={onScroll}
-        className="relative flex-1 overflow-auto"
+        className="relative flex-1 overflow-auto bg-zinc-100 dark:bg-zinc-950"
         data-testid="pdf-scroll"
       >
         {!hasPdf ? (
           <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
             {compiling ? (
               <>
-                <Loader2 className="h-8 w-8 animate-spin text-slate-400" />
-                <p className="text-sm text-slate-500 dark:text-slate-400">Compiling…</p>
+                <Loader2 className="h-8 w-8 animate-spin text-zinc-400" />
+                <p className="text-sm font-medium text-zinc-500 dark:text-zinc-400">Compiling…</p>
               </>
             ) : (
               <>
-                <p className="text-sm font-medium text-slate-500 dark:text-slate-400">No preview yet</p>
-                <p className="max-w-xs text-xs text-slate-400 dark:text-slate-500">
-                  Press <kbd className="rounded border px-1">⌘↵</kbd> or Compile to build the PDF.
-                </p>
+                <p className="text-sm font-semibold text-zinc-600 dark:text-zinc-300">No preview yet</p>
                 <button
                   type="button"
                   onClick={() => void compileProject()}
-                  className="rounded bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 dark:bg-slate-100 dark:text-slate-900"
+                  className="h-9 rounded-md bg-blue-600 px-3 text-sm font-medium text-white shadow-[0_8px_18px_rgba(37,99,235,0.2)] transition-colors hover:bg-blue-500"
                 >
                   Compile
                 </button>
@@ -353,7 +405,7 @@ export function PdfViewer() {
             )}
           </div>
         ) : (
-          <div className="flex flex-col items-center gap-3 p-3" style={{ filter: MODE_FILTER[mode] }}>
+          <div className="flex flex-col items-center gap-4 p-4" style={{ filter: MODE_FILTER[mode] }}>
             {Array.from({ length: numPages }, (_, i) => i + 1).map((p) => (
               <div
                 key={p}
@@ -362,7 +414,7 @@ export function PdfViewer() {
                   else pageRefs.current.delete(p);
                 }}
                 onClick={(e) => onPageClick(e, p)}
-                className="relative shadow-md"
+                className="relative overflow-hidden rounded-sm bg-white shadow-[0_1px_2px_rgba(18,25,38,0.08),0_22px_44px_rgba(18,25,38,0.16)] ring-1 ring-zinc-950/5 dark:ring-white/10"
                 style={{ cursor: 'default' }}
               >
                 <canvas

@@ -14,6 +14,7 @@ import {
 } from './persist';
 import { editorController } from './editorController';
 import { parentPath } from './treeUtils';
+import { fileToBase64, isAllowedPath, isBinaryPath, sanitiseSegment } from './fileKind';
 import type {
   CompileResultStatus,
   CursorState,
@@ -32,6 +33,8 @@ import type {
 
 export const AUTOSAVE_DELAY = 800;
 export const COMPILE_ON_SAVE_DELAY = 600;
+/** Upload size cap (base64 inflates ~33%, so keep this comfortably under body limits). */
+export const MAX_UPLOAD_BYTES = 12 * 1024 * 1024;
 
 /** Debounce timers for per-file autosave (kept outside React/store state). */
 const saveTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -133,7 +136,8 @@ interface EditorState {
   setActive: (id: string) => void;
   setContent: (id: string, content: string) => void;
   setCursor: (id: string, cursor: CursorState) => void;
-  createFile: (path: string, content?: string) => Promise<FileMeta | null>;
+  createFile: (path: string, content?: string, encoding?: 'utf8' | 'base64') => Promise<FileMeta | null>;
+  uploadFiles: (files: File[], parentDir: string) => Promise<{ uploaded: number; errors: string[] }>;
   renameFile: (id: string, newPath: string) => Promise<void>;
   deleteFile: (id: string) => Promise<void>;
   createFolder: (path: string) => void;
@@ -150,6 +154,7 @@ interface EditorState {
   revealLocation: (file: string, line: number, column?: number) => Promise<void>;
   consumeReveal: () => void;
   locateInPdf: () => Promise<void>;
+  locateInPdfAt: (file: string, line: number) => Promise<void>;
   syncInverseJump: (page: number, x: number, y: number) => Promise<void>;
 
   // Mathcheck + AI settings
@@ -396,14 +401,48 @@ export const useEditorStore = create<EditorState>((set, get) => {
       persistLayout();
     },
 
-    async createFile(path, content) {
+    async createFile(path, content, encoding) {
       const { projectId } = get();
       if (!projectId) return null;
-      const file = await api.createFile(projectId, path, content);
+      const file = await api.createFile(projectId, path, content, encoding);
       await get().refreshFiles();
       set((s) => ({ contents: { ...s.contents, [file.id]: file.content } }));
       await get().openFile(file.id);
-      return { id: file.id, projectId: file.projectId, path: file.path, updatedAt: file.updatedAt };
+      return { id: file.id, projectId: file.projectId, path: file.path, encoding: file.encoding, updatedAt: file.updatedAt };
+    },
+
+    async uploadFiles(files, parentDir) {
+      const { projectId } = get();
+      if (!projectId) return { uploaded: 0, errors: ['no project'] };
+      const dir = parentDir.replace(/\/+$/, '');
+      const errors: string[] = [];
+      let uploaded = 0;
+      let firstId: string | null = null;
+
+      for (const file of files) {
+        if (!isAllowedPath(file.name)) {
+          errors.push(`${file.name}: unsupported file type`);
+          continue;
+        }
+        if (file.size > MAX_UPLOAD_BYTES) {
+          errors.push(`${file.name}: too large (max ${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)} MB)`);
+          continue;
+        }
+        const path = (dir ? `${dir}/` : '') + sanitiseSegment(file.name);
+        try {
+          const created = isBinaryPath(path)
+            ? await api.createFile(projectId, path, await fileToBase64(file), 'base64')
+            : await api.createFile(projectId, path, await file.text(), 'utf8');
+          uploaded += 1;
+          firstId ??= created.id;
+        } catch (err) {
+          errors.push(`${file.name}: ${err instanceof ApiError ? err.message : 'upload failed'}`);
+        }
+      }
+
+      if (uploaded > 0) await get().refreshFiles();
+      if (firstId) await get().openFile(firstId);
+      return { uploaded, errors };
     },
 
     async renameFile(id, newPath) {
@@ -579,6 +618,18 @@ export const useEditorStore = create<EditorState>((set, get) => {
           line: cursor.line,
           column: cursor.column,
         });
+        const box = res.boxes[0];
+        if (box) set({ forwardHighlight: { ...box, nonce: Date.now() } });
+      } catch {
+        /* synctex unavailable — ignore */
+      }
+    },
+
+    async locateInPdfAt(file, line) {
+      const { projectId } = get();
+      if (!projectId) return;
+      try {
+        const res = await api.syncForward({ projectId, file, line, column: 0 });
         const box = res.boxes[0];
         if (box) set({ forwardHighlight: { ...box, nonce: Date.now() } });
       } catch {

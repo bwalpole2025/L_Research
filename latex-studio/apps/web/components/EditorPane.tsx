@@ -3,11 +3,14 @@
 import { useCallback, useMemo } from 'react';
 import { useEditorStore } from '@/lib/store';
 import { useAiStore } from '@/lib/aiStore';
+import { isBinaryPath } from '@/lib/fileKind';
 import { EditorTabs } from './EditorTabs';
 import { CodeEditor } from './editor/CodeEditor';
+import { BinaryFilePreview } from './editor/BinaryFilePreview';
 
 export function EditorPane() {
   const activeFileId = useEditorStore((s) => s.activeFileId);
+  const files = useEditorStore((s) => s.files);
   const contents = useEditorStore((s) => s.contents);
   const cursors = useEditorStore((s) => s.cursors);
   const theme = useEditorStore((s) => s.theme);
@@ -38,24 +41,31 @@ export function EditorPane() {
     }
   }, [createSnapshot]);
 
+  const activePath = activeFileId ? files.find((f) => f.id === activeFileId)?.path : undefined;
+  const isBinary = activePath !== undefined && isBinaryPath(activePath);
+
   return (
-    <div className="flex h-full flex-col bg-white dark:bg-slate-950">
+    <div className="flex h-full flex-col bg-[var(--ls-editor-bg)]">
       <EditorTabs />
       <div className="min-h-0 flex-1">
-        <CodeEditor
-          fileId={activeFileId}
-          content={activeFileId ? contents[activeFileId] : undefined}
-          theme={theme}
-          cursorFor={cursorFor}
-          pendingReveal={pendingReveal}
-          onChange={setContent}
-          onCursor={setCursor}
-          onRequestSnapshot={onRequestSnapshot}
-          onCompile={() => void compileProject()}
-          onInlineEdit={openInlineEdit}
-          onRevealHandled={consumeReveal}
-          mathMarkers={mathMarkers}
-        />
+        {isBinary && activePath ? (
+          <BinaryFilePreview path={activePath} base64={activeFileId ? contents[activeFileId] : undefined} />
+        ) : (
+          <CodeEditor
+            fileId={activeFileId}
+            content={activeFileId ? contents[activeFileId] : undefined}
+            theme={theme}
+            cursorFor={cursorFor}
+            pendingReveal={pendingReveal}
+            onChange={setContent}
+            onCursor={setCursor}
+            onRequestSnapshot={onRequestSnapshot}
+            onCompile={() => void compileProject()}
+            onInlineEdit={openInlineEdit}
+            onRevealHandled={consumeReveal}
+            mathMarkers={mathMarkers}
+          />
+        )}
       </div>
     </div>
   );

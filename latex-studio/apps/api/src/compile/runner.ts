@@ -6,6 +6,8 @@ import { runProcess, type SpawnResult } from './spawn.js';
 export interface ProjectFileInput {
   path: string;
   content: string;
+  /** "utf8" (default) or "base64" for binary files (figures, fonts, PDFs). */
+  encoding?: string;
 }
 
 export interface TexliveRunner {
@@ -39,7 +41,7 @@ export function createRunner(config: AppConfig): TexliveRunner {
     for (const f of files) {
       const dest = join(dir, f.path);
       await mkdir(dirname(dest), { recursive: true });
-      await writeFile(dest, f.content, 'utf8');
+      await writeFile(dest, Buffer.from(f.content, f.encoding === 'base64' ? 'base64' : 'utf8'));
     }
   }
 

@@ -63,7 +63,7 @@ function truncate(s: string, max: number): string {
 }
 
 /** Keep `max` characters of `content` centred on a 1-based line. */
-function windowAroundLine(content: string, line: number | undefined, max: number): string {
+export function windowAroundLine(content: string, line: number | undefined, max: number): string {
   if (content.length <= max) return content;
   const lines = content.split('\n');
   const center = Math.max(0, Math.min(lines.length - 1, (line ?? 1) - 1));

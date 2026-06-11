@@ -238,3 +238,244 @@ the SDK subprocess overhead) — **for the `/complete` route only**. That overri
 is implemented (`completionsProvider` config + per-request `provider`) and
 **defaults to `agent-sdk`**; flipping it is a config change, not a code change,
 because completions depend only on `ModelProvider` (ADR-004).
+
+## ADR-007 — Phase 7 thesis tools: prose engine + maths-audit cache
+
+**Status:** accepted
+
+### Prose checker (Feature 2)
+Chosen: **a local LaTeX-aware stripper + nspell (en-GB Hunspell) + rule-based
+lints**, with an **optional local LanguageTool container** for grammar/style —
+rather than hand-rolling a grammar engine or sending text to a hosted service.
+
+- **LaTeX-awareness** is a custom tokenizer (`prose/strip.ts`) that reduces
+  source to plain prose **with a per-character source map**, skipping the
+  preamble, comments, inline/display math, math & verbatim environments, command
+  names, and the arguments of reference/citation/structural commands — while
+  keeping the text arguments of formatting commands (`\textbf{…}`, `\section{…}`,
+  captions). Diagnostics map back to the right line/column via the map.
+- **Spelling** uses `nspell` + `dictionary-en-gb` (Hunspell format) — pure JS,
+  **fully local**, en-GB enforced (so "color" is flagged, "colour" is not). A
+  per-project custom dictionary (`Project.customWords`) is an allowlist applied
+  per request, so "add to dictionary" never mutates the shared speller.
+- **Consistency lints** (en-GB mixed-usage, double spaces, straight/curly quote
+  mixing, inconsistent hyphenation) are deterministic rules, individually
+  toggleable — not AI.
+- **LanguageTool** is optional and, when used, is a **local container**
+  (`LANGUAGETOOL_URL`, docker-compose `prose` profile). `engine.local` is always
+  true and, when the URL is unset, the checker makes **no network call at all**.
+
+### Maths-audit verdict cache (Feature 1)
+`audit/service.ts` keeps an in-memory cache keyed on **normalised equation
+content** (`s.replace(/\s+/g,'')`) + macros + assumptions — not on line numbers.
+A re-audit after an unrelated edit (which shifts line numbers but not equation
+content) is a full cache hit (`checked: 0`) and re-derives current line numbers
+from a fresh extraction, so verdicts stay correct while no equation is rechecked.
+`"unknown"` (unparseable / macro-heavy) is reported honestly and never collapsed
+into `"passed"`.
+
+### Outline / cross-reference (Feature 3)
+`thesis/parse.ts` is a line-based parser (the editor's legacy `stex` mode has no
+Lezer tree — see ADR-006), resolving multi-file order by following
+`\input`/`\include` from the root, and deriving xref health from the
+label/ref/cite/bib index (undefined-ref, duplicate-label, missing-cite as
+errors; unused-label and unlabelled-numbered-equation as info).
+
+## ADR-008 — Co-derivation engine: the LLM proposes, SymPy decides
+
+**Status:** accepted
+
+### The seam (architectural rule, absolute)
+`POST /projects/:id/coderive` runs **propose → verify → bounded-retry**. The LLM
+(subscription `ModelProvider`, Phase 4A) only ever **proposes** candidate steps as
+structured JSON (`coderive/propose.ts`). The existing **mathcheck SymPy** service
+is the **sole arbiter of correctness** (`coderive/verify.ts`): `/equivalent` for a
+single transition, `/check-derivation` for chains, with the project macro table
+and assumptions. A refuted candidate is fed SymPy's counterexample and re-proposed
+(max 3 rounds; `coderive/engine.ts` logs every round). The LLM's confidence is
+irrelevant; only a SymPy `verified` candidate is insertable.
+
+- `unknown` (SymPy could not parse/decide) is the **honest default** and is
+  **never** upgraded to `verified` on the model's say-so.
+- A persistently-wrong proposal is returned `✗ unverified` with the counterexample
+  after 3 rounds — never `✓`. (Proven in `test/coderive.test.ts` against live SymPy.)
+
+### Context assembly (`coderive/context.ts`)
+Always: macro table + assumptions (notation match) and a budgeted document window.
+References are **graded by provenance** (`coderive/references.ts`):
+`full-text` (the cited work's source — `.tex`/`.txt`/`.pdf`, extracted locally and
+searched for relevant passages) · `metadata-only` (a `.bib` entry but no source) ·
+`not-found`. Metadata-only / not-found references carry an explicit **"content NOT
+provided — do not fabricate"** notice in the prompt, and any candidate citing such
+a key is flagged `attributionUnverified`. **No external web fetch occurs** — only
+project files are read (asserted in tests). PDF text is extracted with
+`pdfjs-dist` in-process; extractions are cached.
+
+### The honesty boundary (enforced in the UI and here)
+A green SymPy tick establishes **exactly one thing**: the proposed expression is
+algebraically equivalent to the expression it claims to equal, under the stated
+assumptions. It does **NOT** verify any of:
+- that the governing equation / modelling setup is correct;
+- that the step is the *intended* or *useful* one (only that it is valid);
+- that asymptotic ordering, convergence, or domain of validity holds;
+- that a cited reference actually contains the attributed technique/result —
+  **citation accuracy is unverified and labelled "attribution unverified — confirm
+  against source"**.
+The UI never lets a green tick imply these (`CoderivePanel.tsx` shows the boundary
+note on every result). Insertion goes through the Phase-5 diff-and-accept flow;
+forcing an unverified/unknown step inserts it with the amber "unverified" underline
++ counterexample tooltip.
+
+## ADR-009 — Document Review: annotated review PDF + the honesty contract
+
+**Status:** accepted
+
+### What it is
+A single command (`POST /projects/:id/review`) that *composes* the existing
+engines into a normalised list of findings on four axes, maps each onto PDF
+coordinates, and writes an annotated `<root>.review.pdf` — never touching the
+clean original. The only genuinely new capability is the coordinate-mapping +
+PDF annotation; everything else is reuse.
+
+- **Axis 1 (maths)** — the Phase-7 maths audit (SymPy). `refuted`/`unknown` only;
+  passes are not findings. The ONLY axis that can be certain.
+- **Axis 4 spelling** — the Phase-7 prose check, spelling rule only (en-GB,
+  deterministic) → `verified-typo`.
+- **Axes 2 (literature), 3 (background), 4-prose** — a structured LLM call
+  (`ModelProvider`) returning JSON findings. The LLM is a **proposer, never an
+  arbiter**: confidence is fixed by axis server-side (`llm-judgement` /
+  `llm-judgement-low` / `llm-suggestion`), and a literature claim citing a source
+  whose text is NOT in the project is forcibly downgraded to **"attribution
+  unverified"** — never a contradiction. An LLM failure never sinks the
+  deterministic findings; `deterministicOnly` skips the model entirely.
+
+### Coordinates + annotation
+Findings → PDF via the Phase-2 **SyncTeX forward** map; a line that yields nothing
+falls back to the nearest mapped line and is flagged "approximate location".
+Annotation is done by **PyMuPDF (fitz)** in the mathcheck Python service
+(`/annotate-pdf`): colour-coded highlights with popups, an appended **legend**
+page (the honesty contract), and an **index** page whose rows are internal
+GOTO links to each highlight, plus a back-link from every highlight to the index.
+
+### Licence — PyMuPDF (AGPL-3.0)
+PyMuPDF is AGPL-3.0. This is acceptable here because LaTeX Studio is a
+**single-user, locally-hosted** tool — there is no distribution of a modified
+networked service to third parties. If a permissive licence is ever required
+(e.g. shipping this as a hosted multi-tenant service), swap the annotator for
+**pikepdf** (MPL-2.0) — the `/annotate-pdf` endpoint is the only place fitz is
+used. Documented here per the spec.
+
+### The honesty contract (UI + PDF legend + this ADR)
+- Only **red** (SymPy algebra errors) and **blue** (deterministic spelling) are
+  machine-verified. **orange** (literature), **purple** (background) and **yellow**
+  (prose) are LLM judgements that may be wrong in EITHER direction — false alarms
+  AND missed real errors — and must be checked by the author.
+- A review with **no red** means SymPy found no algebra errors *in what it could
+  parse* — NOT that the document is correct. `unknown` (grey) maths and
+  unavailable references are reported as such, never silently treated as fine.
+- The LLM never inserts a citation absent from the project `.bib`, and never
+  asserts a "known result" it is unsure of — it prefers omission.
+- Nothing in this feature edits the document; fixes flow only through the existing
+  diff-and-accept. The review output is read-only annotation.
+
+## ADR-010 — Hierarchical folders + the Literature library
+
+**Status:** accepted (Library + linking first; source-tree migration deferred)
+
+### Sequencing
+The full spec is two trees on one folder mechanism plus a library, citation
+linking, and trash. The **source-tree migration** (moving the working file system
+from path-based virtual folders to a real `folderId` + cascading-path model) is
+invasive and risks the working compile/SyncTeX. We delivered the **additive,
+lower-risk path first**: the `Folder` model (used now for the **literature** tree),
+the Literature library, the citation-linking payoff, and Trash — leaving the
+source tree on its current path mechanism so compile/SyncTeX keep working. The
+source-tree `folderId` migration (cascading paths in one transaction,
+cycle/collision rejection, drag-and-drop, source deletes → trash) is a tracked
+**follow-up**; `TexFile.folderId` is already added (nullable) as prep.
+
+### Data model
+`Folder { tree: source|literature }` with `@@unique(projectId, tree, parentId, name)`
+(root NULL-parent collisions are additionally checked in the route, since Postgres
+treats NULLs as distinct). `LiteratureItem` holds metadata + a `storagePath`;
+`TrashEntry { kind, payload: Json }` soft-deletes with enough to restore.
+
+### Storage
+Literature **PDFs are binary → never in Postgres.** They live on the compile-
+workspace volume at `<project>/literature/<uuid>.pdf`; the row holds metadata +
+`storagePath`. Text is extracted by **PyMuPDF** in the mathcheck service
+(`POST /extract-pdf`, bytes in / text+pageCount+offline-metadata out) and cached
+into `extractedText`. The API sends bytes (not a path) — mathcheck does not mount
+the workspace, matching the `/annotate-pdf` pattern (ADR-009).
+
+### The citation-linking payoff (honesty preserved)
+`buildReferences` (used by Co-Derivation and Document-Review) now resolves a cite
+key → linked `LiteratureItem` → cached `extractedText` and surfaces the relevant
+passages with provenance **"full-text (library)"** (`library: true`). A linked
+article with no extracted text, or a bare `.bib` entry, stays **metadata-only**;
+an unlinked key stays metadata-only / not-found. The honesty contract is intact:
+the review can only claim a literature inconsistency when it actually had the
+source text — verified by test (`library.test.ts`: linked ⇒ full-text, unlinked ⇒
+metadata-only, never fabricated).
+
+### Trash & safety
+Deletes (article, folder) go to `TrashEntry`, never oblivion. A folder delete
+captures its whole subtree so restore rebuilds it (same ids preserve cite links).
+"Empty trash" is a separate, explicit two-step confirm and is the only thing that
+removes the PDF bytes from disk.
+
+### Optional online enrichment
+DOI → Crossref (`https://api.crossref.org/works/{doi}`) is the only network path
+and is **off by default** — only ever called by an explicit per-item action;
+never auto-fetched. Everything else (extraction, metadata heuristics, search) is
+offline-first.
+
+## ADR-011 — Document-aware prediction (DocumentModel card + multi-granularity predict-next)
+
+**Status:** accepted
+
+### The core idea: a cached context card
+A per-project **DocumentModel** (`docmodel/build.ts`) is recomputed on a **slow
+debounce** (3s idle, or on save) — NOT per keystroke — and distilled into a
+compact **context card** (~800-token budget): outline (Phase 7), notation table
+(`\newcommand`/`\def` + the Phase-3 macro table + a heuristic, explicitly
+low-confidence symbol glossary from "let $x$ denote…" phrases), the label registry
+(Phase 6), intent signals (abstract + recent heading), and the last few display
+equations. `POST /projects/:id/document-model` returns the card + `notationSymbols`;
+the client caches it (`documentModelStore`). Every prediction is document-aware via
+the **cached card text** + the local window — per-keystroke cost stays low (the card
+is cached text, never a recompute on the inline path). Asserted by test:
+`scheduleRefresh` fires the build at most once after many input events.
+
+### Part 2 — feeding the 5S inline loop
+Every `/complete` request now carries `contextCard` + a cheap, client-computed
+`position` ("mid-derivation", "after \\begin{proof}", "at the start of a section",
+"in the abstract"). The system prompt gains the document-aware instruction (reuse
+the document's macros/symbols, predict what THIS document says next). The 5S inline
+loop, latency engineering, cancellation/cache, and the SymPy verification hook are
+untouched — they just receive better context. Notation symbols are returned so the
+client can flag a prediction introducing an unknown symbol (info only).
+
+### Part 3 — multi-granularity "predict next"
+A user-triggered command (⌘⇧Space + a status-bar affordance) calls
+`POST /predict-next` with a granularity (auto/prose/maths/structural; `auto`
+detected from the cursor context). The result renders as a **distinct multi-line
+ghost block** (`predictBlock.ts`, visually separate from the 5S single-line ghost):
+**Tab** = accept all, **⌘→** = accept one word/step, **Esc** = dismiss, **Alt+]** =
+regenerate. A stronger model is allowed here (user-triggered, not per-keystroke);
+inline stays Haiku-class on the 5S budget.
+
+### Maths verification (reused, extended)
+A predicted equation step `LHS = RHS` is checked via the existing mathcheck
+`/equivalent` hook against the prior line; predicted chains check each step.
+Verified steps insert clean; refuted steps carry the Phase-5S amber "unverified —
+counterexample" underline; prediction is never blocked. The honesty rule from the
+co-derivation engine holds: a predicted step is a suggestion until SymPy verifies
+the algebra, and SymPy verifying the algebra does not make it the *intended* step.
+
+### Controls
+Settings: document-aware on/off (reverts to plain 5S local window), how much of the
+model to include, prediction-granularity default, and a separate model picker for
+predict-next. Turning inline completions off entirely (Phase 5S toggle) stops all
+calls. The status bar shows when the DocumentModel last refreshed and a "Predict
+next" affordance.

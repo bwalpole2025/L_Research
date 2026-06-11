@@ -14,3 +14,6 @@ lark>=1.1
 
 # Tests
 pytest>=8.2
+
+# Review-PDF annotation (AGPL-3.0; OK for single-user local use — ADR-009)
+pymupdf>=1.24

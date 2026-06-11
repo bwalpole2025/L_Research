@@ -102,6 +102,8 @@ const completeBody = z.object({
   model: z.string().trim().min(1).max(100).optional(),
   provider: z.enum(['agent-sdk', 'api']).optional(),
   baseline: z.boolean().optional(),
+  contextCard: z.string().max(8_000).optional(),
+  position: z.string().max(200).optional(),
 });
 
 export async function aiRoutes(app: FastifyInstance): Promise<void> {

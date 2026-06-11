@@ -10,9 +10,12 @@ import {
   currentSuggestion,
   type InlineSuggestConfig,
 } from '@/components/editor/inlineSuggest';
+import { setPrediction, type PredictConfig } from '@/components/editor/predictBlock';
 import { CompletionScheduler } from './scheduler';
 import { detectMode } from './mode';
 import { formatCounterexample, mathContent, rhsOf } from './mathStep';
+import { computePosition } from './position';
+import { useDocumentModelStore } from '../documentModelStore';
 import type { CompletionRequestContext } from './types';
 
 const PREFIX_CHARS = 8000; // ~2000 tokens
@@ -32,6 +35,12 @@ export class CompletionController {
       fetch: (req, signal) => {
         const pid = this.getProjectId();
         if (!pid) return Promise.reject(new Error('no project'));
+        // Document-aware: include the CACHED card + cheap position (never a rebuild here).
+        const dm = useDocumentModelStore.getState();
+        if (dm.enabled && dm.card) {
+          const position = this.view ? computePosition(this.view) : undefined;
+          return completeCode(pid, { ...req, contextCard: dm.card, ...(position ? { position } : {}) }, signal);
+        }
         return completeCode(pid, req, signal);
       },
       getConfig: () => useCompletionStore.getState().config(),
@@ -54,10 +63,88 @@ export class CompletionController {
     this.view = view;
   }
 
+  /** Config for the multi-line "predict next" ghost block. */
+  get predictConfig(): PredictConfig {
+    return {
+      onRegenerate: () => void this.triggerPredict(),
+      onAccepted: (text, from, kind) => {
+        if (kind === 'maths') void this.verifyPredictedSteps(from, text);
+      },
+    };
+  }
+
+  /** Trigger a multi-granularity "predict next" (user-action; may take longer). */
+  async triggerPredict(): Promise<void> {
+    const view = this.view;
+    const pid = this.getProjectId();
+    const ed = useEditorStore.getState();
+    if (!view || !pid || !ed.activeFileId) return;
+    const dm = useDocumentModelStore.getState();
+    const cursor = view.state.selection.main.head;
+    const cursorLine = view.state.doc.lineAt(cursor).number;
+    const position = computePosition(view);
+    const activePath = ed.files.find((f) => f.id === ed.activeFileId)?.path;
+    dm.setPredicting(true);
+    try {
+      const res = await api.predictNext(pid, {
+        fileId: ed.activeFileId,
+        cursorLine,
+        granularity: dm.granularityDefault,
+        ...(dm.card ? { card: dm.card } : {}),
+        ...(position ? { position } : {}),
+        model: dm.predictModel,
+        ...(activePath ? { overrides: { [activePath]: view.state.doc.toString() } } : {}),
+      });
+      if (res.prediction.trim() && this.view && this.view.state.selection.main.head === cursor) {
+        setPrediction(this.view, { from: cursor, text: res.prediction, kind: res.kind });
+      }
+    } catch (err) {
+      this.handleError(err);
+    } finally {
+      dm.setPredicting(false);
+    }
+  }
+
+  /** Verify each predicted maths step against the previous step (Phase 5S hook, extended). */
+  private async verifyPredictedSteps(from: number, text: string): Promise<void> {
+    const view = this.view;
+    if (!view) return;
+    const doc = view.state.doc;
+    const startLine = doc.lineAt(from).number;
+    const endLine = doc.lineAt(Math.min(from + Math.max(0, text.length - 1), doc.length)).number;
+    const { macros, assumptions } = useEditorStore.getState();
+    for (let n = startLine; n <= endLine; n++) {
+      const line = doc.line(n);
+      const curRhs = rhsOf(line.text);
+      if (!curRhs) continue;
+      let prevRhs: string | null = null;
+      for (let p = n - 1; p >= 1; p--) {
+        const t = doc.line(p).text;
+        if (/\\(begin|end)\{/.test(t) && !mathContent(t)) break;
+        if (mathContent(t)) {
+          prevRhs = rhsOf(t);
+          if (prevRhs) break;
+        }
+      }
+      if (!prevRhs) continue;
+      try {
+        const res = await api.checkEquivalent({ lhs: prevRhs, rhs: curRhs, assumptions, macros });
+        if (res.equivalent === false && this.view) {
+          const detail = res.counterexample ? ` — ${formatCounterexample(res.counterexample)}` : '';
+          addWarning(this.view, line.from, line.to, `Unverified — may not equal the previous step${detail}`);
+        }
+      } catch {
+        /* never blocks insertion */
+      }
+    }
+  }
+
   /** The config wired into the inlineSuggestion() extension. */
   get config(): InlineSuggestConfig {
     return {
       onDocChange: (view) => {
+        // Slow-debounce the document-model rebuild (NOT per keystroke — the call is throttled).
+        useDocumentModelStore.getState().scheduleRefresh();
         // Typing-through kept a suggestion → no network call (speculative reuse).
         if (currentSuggestion(view)) return;
         this.scheduler.schedule(this.buildContext(view));

@@ -90,3 +90,35 @@ def check_derivation_endpoint(req: DerivationRequest) -> dict[str, Any]:
         return check_derivation(req.steps, req.assumptions, req.macros)
     except Exception as exc:  # noqa: BLE001
         return {"steps": [], "transitions": [], "firstFailingPair": None, "error": f"unexpected error: {exc}"}
+
+
+# ── /annotate-pdf — review-PDF annotation (PyMuPDF) ───────────────────────────
+
+
+class AnnotateRequest(BaseModel):
+    pdf_base64: str
+    findings: list[dict[str, Any]]
+
+
+@app.post("/annotate-pdf")
+def annotate_pdf_endpoint(req: AnnotateRequest) -> dict[str, Any]:
+    from .annotate import annotate_pdf
+
+    try:
+        return annotate_pdf(req.pdf_base64, req.findings)
+    except Exception as exc:  # noqa: BLE001 - never crash the service on a bad PDF
+        return {"error": f"annotation failed: {exc}", "pdf_base64": None, "annotations": 0}
+
+
+class ExtractRequest(BaseModel):
+    pdf_base64: str
+
+
+@app.post("/extract-pdf")
+def extract_pdf_endpoint(req: ExtractRequest) -> dict[str, Any]:
+    from .annotate import extract_text
+
+    try:
+        return extract_text(req.pdf_base64)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"extraction failed: {exc}", "text": "", "pageCount": 0}
