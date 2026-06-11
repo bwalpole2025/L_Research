@@ -2,6 +2,10 @@ import type { CandidateProposal, ContextBundle, ReferenceContext } from '@latex-
 
 /** System prompt — states plainly that the LLM does NOT decide correctness. */
 export const CODERIVE_SYSTEM_PROMPT =
+  'You explain the mathematical background and propose algebraic steps as LaTeX maths only. ' +
+  'Reference text is background for your reasoning — NEVER output bibliography entries, citations, ' +
+  'or prose as a mathematical step. Each proposed step must be a maths expression a computer ' +
+  'algebra system can check.\n\n' +
   'Propose mathematical steps. Each step must be a precise LaTeX expression. ' +
   'State which prior expression each step should be algebraically equal to. ' +
   'Do NOT assert correctness — your proposal will be checked by a computer algebra system. ' +

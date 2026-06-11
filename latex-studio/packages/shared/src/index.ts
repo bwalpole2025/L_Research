@@ -252,6 +252,100 @@ export interface DerivationResult {
   error?: string;
 }
 
+// ─── Verification vs LLM-context channels (hard separation) ──────────────────
+//
+// Two disjoint channels, enforced by types:
+//  · LLM-CONTEXT: prose, outline, macro table, assumptions, reference text.
+//    Goes ONLY into the LLM prompt — never to mathcheck.
+//  · VERIFICATION: strings sent to mathcheck. Only display-math extracted from
+//    .tex math environments, explicitly selected inline maths, or LaTeX maths
+//    the LLM proposed inside a parsed step field — and only after the
+//    isPlausibleMathExpression guard accepts them.
+
+/** LLM-CONTEXT channel: prompt material only. Structurally unpassable to the mathcheck client. */
+export interface LlmContextChunk {
+  kind: 'prose' | 'outline' | 'macro-table' | 'assumptions' | 'reference';
+  text: string;
+}
+
+/** Where a verification candidate came from (all are maths-bearing by construction). */
+export type VerificationSource = 'display-math' | 'inline-math-selected' | 'llm-step' | 'user-target';
+
+declare const VERIFICATION: unique symbol;
+
+/**
+ * VERIFICATION channel: the ONLY type the mathcheck client accepts. The brand is
+ * a non-exported unique symbol, so the sole way to obtain one is
+ * makeVerificationCandidate — which runs the isPlausibleMathExpression guard.
+ * An LlmContextChunk (e.g. reference text) is not structurally passable.
+ */
+export interface VerificationCandidate {
+  readonly latex: string;
+  readonly source: VerificationSource;
+  readonly [VERIFICATION]: true;
+}
+
+export type MathGuardResult = { ok: true } | { ok: false; reason: string };
+
+/** BibTeX field names whose `name = {…}` / `name = "…"` lines are never maths. */
+const BIBTEX_FIELDS =
+  'author|title|year|journal|publisher|editor|volume|number|pages|doi|booktitle|month|note|url|isbn|issn|address|edition|series|school|institution|organization|howpublished|chapter|abstract|keywords|file|eprint|archiveprefix|primaryclass|date-added|date-modified|read|rating|date|language|crossref|annote|key';
+
+const BIBTEX_FIELD_RE = new RegExp(`^\\s*(?:${BIBTEX_FIELDS})\\s*=\\s*(?:\\{[\\s\\S]*\\}|"[\\s\\S]*")\\s*,?\\s*$`, 'i');
+
+/** Any `ident = {…},` line (trailing comma + fully braced value) is BibTeX-shaped, whatever the field. */
+const BIBTEX_SHAPE_RE = /^\s*[\w-]+\s*=\s*\{[^{}=]*\}\s*,\s*$/;
+
+const BIBTEX_ENTRY_RE = /@\s*(?:article|book|inproceedings|incollection|techreport|phdthesis|mastersthesis|misc|unpublished|proceedings|inbook|booklet|manual|conference|online|electronic|patent|periodical|standard|string|comment|preamble)\s*[{(]/i;
+
+/** A lone structural LaTeX command (cite/ref/label/sectioning/preamble) is not maths. */
+const STRUCTURAL_LATEX_RE =
+  /^\s*\\(?:usepackage|RequirePackage|documentclass|input|include|section\*?|subsection\*?|subsubsection\*?|chapter\*?|paragraph\*?|cite[a-zA-Z]*|parencite|textcite|ref|eqref|cref|Cref|pageref|label|caption|footnote|bibliography(?:style)?|addbibresource|includegraphics|item|maketitle|tableofcontents|begin|end)\b(?:\s*(?:\[[^\]]*\])?\s*\{[^{}]*\})*\s*,?\s*$/;
+
+/**
+ * Guard run before EVERY mathcheck call: rejects strings that look
+ * non-mathematical (BibTeX fields/entries, prose, comments, empty/punctuation),
+ * with the reason. SymPy stays the arbiter of correctness for everything that
+ * passes; this only filters out what is plainly not a maths expression.
+ */
+export function isPlausibleMathExpression(s: string): MathGuardResult {
+  const t = s.trim();
+  if (!t) return { ok: false, reason: 'empty' };
+  if (t.startsWith('%')) return { ok: false, reason: 'latex-comment' };
+  if (BIBTEX_ENTRY_RE.test(t)) return { ok: false, reason: 'bibtex-entry' };
+  if (BIBTEX_FIELD_RE.test(t)) return { ok: false, reason: 'bibtex-field' };
+  if (BIBTEX_SHAPE_RE.test(t)) return { ok: false, reason: 'bibtex-field-shaped' };
+  if (STRUCTURAL_LATEX_RE.test(t)) return { ok: false, reason: 'structural-latex' };
+
+  // Empty or punctuation-only once LaTeX commands and braces are stripped.
+  const stripped = t.replace(/\\[a-zA-Z]+\*?/g, ' ').replace(/[{}]/g, ' ');
+  if (!/[A-Za-z0-9]/.test(stripped)) return { ok: false, reason: 'no-content' };
+
+  // Mostly natural-language prose: several real words and not a single maths
+  // token anywhere. Digits alone do not count ("vol. 2, chap. 22" is prose);
+  // an operator, relation, or LaTeX command does.
+  const words = stripped.match(/[A-Za-z]{3,}/g) ?? [];
+  const wordChars = words.reduce((n, w) => n + w.length, 0);
+  const hasMathToken = /[=+\-*/^_<>|!]|\\[a-zA-Z]/.test(t);
+  if (words.length >= 2 && wordChars >= 12 && !hasMathToken) return { ok: false, reason: 'prose' };
+
+  return { ok: true };
+}
+
+/**
+ * The ONLY constructor of VerificationCandidate. Returns the rejection reason
+ * instead when the guard refuses — callers must drop the string (never send it
+ * to mathcheck, never surface it as an insertable step).
+ */
+export function makeVerificationCandidate(
+  latex: string,
+  source: VerificationSource,
+): { candidate: VerificationCandidate; rejected?: undefined } | { candidate?: undefined; rejected: string } {
+  const verdict = isPlausibleMathExpression(latex);
+  if (!verdict.ok) return { rejected: verdict.reason };
+  return { candidate: { latex: latex.trim(), source } as VerificationCandidate };
+}
+
 // ─── Model provider (AI features) ────────────────────────────────────────────
 //
 // All AI features depend ONLY on this interface (see docs/decisions.md ADR-004).
@@ -768,12 +862,23 @@ export interface CiteLink {
 export interface CoderiveRound {
   round: number;
   proposalCount: number;
+  /** Proposals rejected by the maths guard this round (never sent to SymPy, never insertable). */
+  skippedCount?: number;
   verdicts: Array<{ latex: string; status: CoderiveStatus; method: string; refutedReason?: string }>;
+}
+
+/** A proposal the maths guard rejected — never sent to mathcheck, never insertable. */
+export interface CoderiveSkipped {
+  latex: string;
+  /** Internal guard reason ("bibtex-field", "prose", …). */
+  reason: string;
 }
 
 export interface CoderiveResponse {
   intent: CoderiveIntent;
   candidates: CoderiveCandidate[];
+  /** "Not a maths expression — skipped": shown for transparency, with no insert affordance. */
+  skipped: CoderiveSkipped[];
   context: ContextBundleSummary;
   rounds: CoderiveRound[];
   anchors: { from?: string; to?: string; goal?: string };

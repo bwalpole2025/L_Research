@@ -104,8 +104,52 @@ function collectSteps(inner: string, innerStartOffset: number, lineStarts: numbe
   return steps;
 }
 
+/** Replace a region with spaces, keeping newlines, so offsets/line numbers survive. */
+function blank(content: string, from: number, to: number): string {
+  const region = content.slice(from, to).replace(/[^\n]/g, ' ');
+  return content.slice(0, from) + region + content.slice(to);
+}
+
+const BIB_ENV_RE = /\\begin\{(thebibliography|filecontents\*?)\}[\s\S]*?\\end\{\1\}/g;
+const BIB_ENTRY_HEAD_RE = /@\s*[a-zA-Z]+\s*\{/g;
+
+/**
+ * Blank out bibliography content — thebibliography / filecontents environments
+ * and raw BibTeX `@entry{…}` blocks — so the math scanner can never emit
+ * `key = {value}` lines as expressions. Offsets are preserved.
+ */
+export function stripBibliographyRegions(content: string): string {
+  let out = content;
+  let m: RegExpExecArray | null;
+  BIB_ENV_RE.lastIndex = 0;
+  while ((m = BIB_ENV_RE.exec(out)) !== null) {
+    out = blank(out, m.index, m.index + m[0].length);
+  }
+  // BibTeX entries: from `@type{` to the brace-balanced close.
+  BIB_ENTRY_HEAD_RE.lastIndex = 0;
+  while ((m = BIB_ENTRY_HEAD_RE.exec(out)) !== null) {
+    let depth = 1;
+    let i = m.index + m[0].length;
+    while (i < out.length && depth > 0) {
+      if (out[i] === '{') depth += 1;
+      else if (out[i] === '}') depth -= 1;
+      i += 1;
+    }
+    out = blank(out, m.index, i);
+    BIB_ENTRY_HEAD_RE.lastIndex = m.index;
+  }
+  return out;
+}
+
+/** Files that are bibliography data — never scanned for maths. */
+export function isBibliographyFile(path: string): boolean {
+  return /\.(bib|bst)$/i.test(path);
+}
+
 /** Extract every display-math block (env or \[..\]) with line spans + steps. */
 export function extractMathBlocks(file: string, content: string): MathBlock[] {
+  if (isBibliographyFile(file)) return [];
+  content = stripBibliographyRegions(content);
   const lineStarts = lineStartsOf(content);
   const blocks: MathBlock[] = [];
 

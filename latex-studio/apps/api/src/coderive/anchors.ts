@@ -1,4 +1,4 @@
-import type { CoderiveAnchorRange, CoderiveIntent } from '@latex-studio/shared';
+import { isPlausibleMathExpression, type CoderiveAnchorRange, type CoderiveIntent } from '@latex-studio/shared';
 import { bareMath, extractMathBlocks } from '../audit/extract.js';
 
 export interface ResolvedAnchors {
@@ -19,13 +19,25 @@ export function looksLikeMath(expr: string | undefined): boolean {
   const e = expr.trim();
   if (!e) return false;
   if (STRUCTURAL_CMD.test(e)) return false;
-  // A bare word / prose line with no math operators, braces, or LaTeX command is unlikely to be math.
-  return /[=+\-*/^_\\{}<>]|\\[a-zA-Z]+|[0-9]/.test(e) || e.length <= 24;
+  // The shared maths guard (rejects BibTeX fields/entries, prose, comments, …).
+  return isPlausibleMathExpression(e).ok;
 }
 
-/** The display-math expression at (or nearest above) a 1-based line, else the bare line. */
+/** Inline maths on the cursor line ($…$ or \(…\)) — "explicitly selected" inline math. */
+function inlineMathOnLine(raw: string): string | undefined {
+  const m = /\$([^$]+)\$/.exec(raw) ?? /\\\(([\s\S]+?)\\\)/.exec(raw);
+  const inner = m?.[1]?.trim();
+  return inner ? bareMath(inner) : undefined;
+}
+
+/**
+ * The anchor expression at a 1-based line. ONLY maths can anchor: the
+ * display-math step at (or just above) the line, else inline $…$ on the cursor
+ * line itself. There is deliberately NO bare-line fallback — a raw document
+ * line (BibTeX field, prose, …) must never become a verification expression.
+ */
 export function exprAtLine(content: string, line: number): string | undefined {
-  const blocks = extractMathBlocks('anchor', content);
+  const blocks = extractMathBlocks('anchor.tex', content);
   let best: { latex: string; line: number } | undefined;
   for (const b of blocks) {
     for (const s of b.steps) {
@@ -33,10 +45,14 @@ export function exprAtLine(content: string, line: number): string | undefined {
       if (s.line <= line && (!best || s.line > best.line)) best = s;
     }
   }
-  if (best && best.line >= line - 2) return bareMath(best.latex);
+  // Inline maths on the cursor line itself beats a display step further above.
   const raw = content.split('\n')[line - 1];
-  if (raw && bareMath(raw)) return bareMath(raw);
-  return best ? bareMath(best.latex) : undefined;
+  if (raw) {
+    const inline = inlineMathOnLine(raw);
+    if (inline) return inline;
+  }
+  if (best && best.line >= line - 2) return bareMath(best.latex);
+  return undefined;
 }
 
 export function resolveAnchors(

@@ -1,14 +1,12 @@
 import type {
-  CandidateProposal,
   CoderiveIntent,
   CoderiveStatus,
   DerivationTransition,
   EquivalenceResult,
   MathCounterexample,
+  VerificationCandidate,
 } from '@latex-studio/shared';
-import { bareMath } from '../audit/extract.js';
 import { checkDerivation, checkEquivalent } from './mathcheck.js';
-import type { ResolvedAnchors } from './anchors.js';
 
 export interface Verdict {
   status: CoderiveStatus;
@@ -21,6 +19,13 @@ export interface VerifyOpts {
   mathcheckUrl: string;
   macros: Record<string, string>;
   assumptions: string;
+}
+
+/** Anchors that passed the maths guard — the only form verification accepts. */
+export interface GuardedAnchors {
+  from?: VerificationCandidate;
+  to?: VerificationCandidate;
+  goal?: VerificationCandidate;
 }
 
 const UNKNOWN: Verdict = { status: 'unknown', method: 'no-anchor', refutedReason: 'could not resolve the anchor expression' };
@@ -66,24 +71,23 @@ function combineFillGap(t1: DerivationTransition | undefined, t2: DerivationTran
   return { status: 'unknown', method: a.status === 'unknown' ? a.method : c.method };
 }
 
-/** Verify ONE candidate for fill-gap / next-step / justify. SymPy is the sole arbiter. */
+/** Verify ONE guard-passed candidate for fill-gap / next-step / justify. SymPy is the sole arbiter. */
 export async function verifyCandidate(
   intent: CoderiveIntent,
-  anchors: ResolvedAnchors,
-  candidate: CandidateProposal,
+  anchors: GuardedAnchors,
+  candidate: VerificationCandidate,
   opts: VerifyOpts,
 ): Promise<Verdict> {
-  const bare = bareMath(candidate.latex);
   const { mathcheckUrl: url, macros, assumptions } = opts;
 
   if (intent === 'fill-gap') {
     if (!anchors.from || !anchors.to) return UNKNOWN;
-    const res = await checkDerivation(url, [anchors.from, bare, anchors.to], assumptions, macros);
+    const res = await checkDerivation(url, [anchors.from, candidate, anchors.to], assumptions, macros);
     return combineFillGap(res.transitions.find((t) => t.to === 1), res.transitions.find((t) => t.to === 2));
   }
   if (intent === 'next-step') {
     if (!anchors.from) return UNKNOWN;
-    const res = await checkEquivalent(url, anchors.from, bare, assumptions, macros);
+    const res = await checkEquivalent(url, anchors.from, candidate, assumptions, macros);
     return fromEquivalence(res, 'the proposed step is not equal to the current expression');
   }
   if (intent === 'justify') {
@@ -97,15 +101,15 @@ export async function verifyCandidate(
 
 /** Verify a reach-goal chain [from, ...steps, goal] end to end. */
 export async function verifyChain(
-  from: string | undefined,
-  steps: string[],
-  goal: string | undefined,
+  from: VerificationCandidate | undefined,
+  steps: VerificationCandidate[],
+  goal: VerificationCandidate | undefined,
   opts: VerifyOpts,
 ): Promise<{ overall: Verdict; perStep: Verdict[] }> {
   if (!from || !goal || steps.length === 0) {
     return { overall: UNKNOWN, perStep: steps.map(() => UNKNOWN) };
   }
-  const seq = [from, ...steps.map(bareMath), goal];
+  const seq = [from, ...steps, goal];
   const res = await checkDerivation(opts.mathcheckUrl, seq, opts.assumptions, opts.macros);
   // step i (seq index i+1) has incoming transition (i → i+1).
   const perStep = steps.map((_, i) =>

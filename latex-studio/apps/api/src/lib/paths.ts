@@ -1,5 +1,5 @@
 /** Text file extensions (stored utf8, editable). */
-export const TEXT_EXTENSIONS = ['.tex', '.bib', '.sty', '.cls', '.txt', '.md', '.csv'] as const;
+export const TEXT_EXTENSIONS = ['.tex', '.bib', '.bst', '.sty', '.cls', '.clo', '.txt', '.md', '.csv'] as const;
 
 /** Binary file extensions (uploaded, stored base64 — figures, fonts, PDFs). */
 export const BINARY_EXTENSIONS = [

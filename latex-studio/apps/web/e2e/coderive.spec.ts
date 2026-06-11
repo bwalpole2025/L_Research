@@ -22,7 +22,8 @@ const RESULT = {
       { key: 'ghostref', provenance: 'metadata-only', passageCount: 0 },
     ],
   },
-  rounds: [{ round: 1, proposalCount: 2, verdicts: [{ latex: 'x^2 + 2x + 1', status: 'verified', method: 'symbolic' }, { latex: 'x^2 + 2x + 2', status: 'unverified', method: 'sample' }] }],
+  skipped: [{ latex: 'author = {Basset, AB},', reason: 'bibtex-field' }],
+  rounds: [{ round: 1, proposalCount: 3, skippedCount: 1, verdicts: [{ latex: 'x^2 + 2x + 1', status: 'verified', method: 'symbolic' }, { latex: 'x^2 + 2x + 2', status: 'unverified', method: 'sample' }] }],
   anchors: { from: '(x+1)^2' },
 };
 
@@ -68,6 +69,15 @@ test('SymPy verdicts gate insertion; counterexample + attribution + provenance a
   await expect(page.getByText('Insert anyway (unverified)')).toBeVisible();
   // The wrong one cited a non-full-text key → attribution unverified.
   await expect(page.getByText(/attribution unverified/)).toBeVisible();
+
+  // A guard-skipped non-math proposal is disclosed but NOT insertable: it sits in
+  // the skipped section with the reason, and offers no button of any kind.
+  const skipped = page.getByTestId('coderive-skipped');
+  await expect(skipped).toBeVisible();
+  await expect(skipped).toContainText('not a maths expression — skipped');
+  await expect(skipped).toContainText('bibtex-field');
+  await expect(skipped).toContainText('author = {Basset, AB},');
+  await expect(skipped.locator('button')).toHaveCount(0);
 
   // "context used" discloses reference provenance.
   await page.getByText(/context used/).click();

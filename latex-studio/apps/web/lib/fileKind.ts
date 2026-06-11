@@ -1,6 +1,6 @@
 /** File-type helpers shared by the file tree, upload, and editor preview. */
 
-export const TEXT_EXTENSIONS = ['.tex', '.bib', '.sty', '.cls', '.txt', '.md', '.csv'];
+export const TEXT_EXTENSIONS = ['.tex', '.bib', '.bst', '.sty', '.cls', '.clo', '.txt', '.md', '.csv'];
 export const BINARY_EXTENSIONS = [
   '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tiff', '.tif', '.ico', '.svg',
   '.pdf', '.eps', '.ps', '.ttf', '.otf', '.woff', '.woff2',

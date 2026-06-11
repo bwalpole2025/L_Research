@@ -30,6 +30,16 @@ export async function coderiveRoutes(app: FastifyInstance): Promise<void> {
     const target = await app.prisma.texFile.findFirst({ where: { id: parsed.data.fileId, projectId: project.id } });
     if (!target) return reply.code(404).send({ error: 'file not found' });
 
+    // Co-derive anchors must be display equations in a document — bibliography
+    // data (.bib/.bst) and other non-.tex files can never supply a verification
+    // expression (this is how `author = {Basset, AB},` once reached SymPy).
+    if (!/\.tex$/i.test(target.path)) {
+      return reply.code(422).send({
+        error: `Co-derive works on .tex documents — "${target.path}" cannot supply a mathematical anchor.`,
+        kind: 'invalid',
+      });
+    }
+
     const dbFiles = await app.prisma.texFile.findMany({
       where: { projectId: project.id },
       select: { path: true, content: true, encoding: true },

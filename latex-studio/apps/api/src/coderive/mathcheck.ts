@@ -1,7 +1,14 @@
-import type { DerivationResult, EquivalenceResult, MathParseResult } from '@latex-studio/shared';
+import type { DerivationResult, EquivalenceResult, MathParseResult, VerificationCandidate } from '@latex-studio/shared';
+
+/**
+ * The mathcheck client accepts ONLY VerificationCandidate — the branded type
+ * whose sole constructor (makeVerificationCandidate) runs the maths guard.
+ * LLM-context material (reference text, prose, …) is plain string/LlmContextChunk
+ * and is not structurally passable here.
+ */
 
 /** POST to the internal mathcheck service with a per-call timeout. */
-export async function postMathcheck<T>(url: string, path: string, body: unknown, timeoutMs = 8000): Promise<T> {
+async function postMathcheck<T>(url: string, path: string, body: unknown, timeoutMs = 8000): Promise<T> {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
   try {
@@ -19,30 +26,30 @@ export async function postMathcheck<T>(url: string, path: string, body: unknown,
 
 export function checkEquivalent(
   url: string,
-  lhs: string,
-  rhs: string,
+  lhs: VerificationCandidate,
+  rhs: VerificationCandidate,
   assumptions: string,
   macros: Record<string, string>,
   timeoutMs?: number,
 ): Promise<EquivalenceResult> {
-  return postMathcheck<EquivalenceResult>(url, '/equivalent', { lhs, rhs, assumptions, macros }, timeoutMs);
+  return postMathcheck<EquivalenceResult>(url, '/equivalent', { lhs: lhs.latex, rhs: rhs.latex, assumptions, macros }, timeoutMs);
 }
 
 export function checkDerivation(
   url: string,
-  steps: string[],
+  steps: VerificationCandidate[],
   assumptions: string,
   macros: Record<string, string>,
   timeoutMs?: number,
 ): Promise<DerivationResult> {
-  return postMathcheck<DerivationResult>(url, '/check-derivation', { steps, assumptions, macros }, timeoutMs);
+  return postMathcheck<DerivationResult>(url, '/check-derivation', { steps: steps.map((s) => s.latex), assumptions, macros }, timeoutMs);
 }
 
 export function parseExpression(
   url: string,
-  latex: string,
+  latex: VerificationCandidate,
   macros: Record<string, string>,
   timeoutMs?: number,
 ): Promise<MathParseResult> {
-  return postMathcheck<MathParseResult>(url, '/parse', { latex, macros }, timeoutMs);
+  return postMathcheck<MathParseResult>(url, '/parse', { latex: latex.latex, macros }, timeoutMs);
 }

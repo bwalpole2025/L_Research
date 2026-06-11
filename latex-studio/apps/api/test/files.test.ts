@@ -113,6 +113,18 @@ describe('file CRUD routes', () => {
     expect(res.statusCode).toBe(400);
   });
 
+  it('accepts a .bst bibliography style file as editable text', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/projects/${projectId}/files`,
+      headers: auth,
+      payload: { path: 'jfm.bst', content: 'ENTRY { author title } {} { label }' },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().encoding).toBe('utf8'); // text, not base64 — editable
+    expect(res.json().content).toBe('ENTRY { author title } {} { label }');
+  });
+
   it('returns 409 on a duplicate path', async () => {
     const first = await app.inject({
       method: 'POST',

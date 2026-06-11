@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { CheckCircle2, CircleHelp, Loader2, XCircle } from 'lucide-react';
 import { useCoderiveStore } from '@/lib/coderiveStore';
-import type { CoderiveCandidate, CoderiveStatus, ContextBundleSummary } from '@/lib/types';
+import type { CoderiveCandidate, CoderiveSkipped, CoderiveStatus, ContextBundleSummary } from '@/lib/types';
 import { Markdown } from '../ai/Markdown';
 
 const BADGE: Record<CoderiveStatus, { icon: typeof CheckCircle2; cls: string; label: string }> = {
@@ -76,6 +76,27 @@ function CandidateCard({ candidate }: { candidate: CoderiveCandidate }) {
         )}
       </div>
     </li>
+  );
+}
+
+/**
+ * Proposals the maths guard rejected (bibliography text, prose, …). Shown for
+ * transparency only — never sent to SymPy, deliberately NO insert affordance.
+ */
+function SkippedList({ skipped }: { skipped: CoderiveSkipped[] }) {
+  if (skipped.length === 0) return null;
+  return (
+    <div className="border-t border-zinc-100 px-3 py-2 dark:border-zinc-800" data-testid="coderive-skipped">
+      <p className="text-[11px] font-medium text-zinc-400">not a maths expression — skipped (never sent to the verifier)</p>
+      <ul className="mt-1 space-y-0.5">
+        {skipped.map((s, i) => (
+          <li key={`${s.latex}:${i}`} className="flex items-baseline gap-2 text-[11px] text-zinc-400">
+            <span className="rounded bg-zinc-100 px-1 font-medium dark:bg-zinc-800">{s.reason}</span>
+            <code className="truncate font-mono">{s.latex}</code>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
@@ -165,6 +186,7 @@ export function CoderivePanel() {
               ))}
               {response.candidates.length === 0 && <li className="px-3 py-3 text-xs text-zinc-400">No proposals.</li>}
             </ul>
+            <SkippedList skipped={response.skipped ?? []} />
             <ContextUsed ctx={response.context} />
             <p className="px-3 py-2 text-[11px] text-zinc-400">
               A ✓ means SymPy proved algebraic equivalence under the stated assumptions — <em>not</em> that the modelling, the
