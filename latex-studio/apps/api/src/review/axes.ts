@@ -51,6 +51,7 @@ export async function spellingFindings(files: ProseInputFile[], customWords: str
         message: d.message,
       };
       if (d.suggestions[0]) finding.suggestion = d.suggestions[0];
+      if (d.word) finding.quotedSpan = d.word; // the exact token, for a precise approve-and-replace
       return finding;
     });
 }

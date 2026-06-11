@@ -87,3 +87,80 @@ test('SymPy verdicts gate insertion; counterexample + attribution + provenance a
   await page.getByText('Insert (diff)').click();
   await expect(page.getByTestId('diff-accept')).toBeVisible();
 });
+
+// ── Whole-document verification ("verify-document" intent) ───────────────────
+
+const DOCVERIFY = {
+  intent: 'verify-document',
+  candidates: [],
+  skipped: [],
+  context: { macroCount: 2, assumptions: '', documentWindowChars: 0, windowPreview: '', references: [] },
+  rounds: [],
+  anchors: {},
+  documentVerification: {
+    report: {
+      blocks: [
+        { id: 'main.tex:3:aaa', file: 'main.tex', lineStart: 3, lineEnd: 3, verdict: 'passed', method: 'simplify', latex: '(x+1)^2 = x^2 + 2x + 1' },
+        { id: 'main.tex:7:bbb', file: 'main.tex', lineStart: 7, lineEnd: 7, verdict: 'failing', method: 'sample', latex: '(x+1)^2 = x^2 + 2x + 2', counterexample: { values: { x: 1 }, lhsVal: 4, rhsVal: 5 } },
+      ],
+      totals: { failing: 1, unknown: 0, passed: 1, checked: 2, cached: 0 },
+      byFile: { 'main.tex': 1 },
+    },
+    comments: [{ id: 'main.tex:7:bbb', comment: 'check for a dropped constant term' }],
+    commentaryProvided: true,
+    commentedCount: 1,
+  },
+};
+
+const DOCVERIFY_SSE =
+  `event: progress\ndata: ${JSON.stringify({ stage: 'verifying equations with SymPy' })}\n\n` +
+  `event: result\ndata: ${JSON.stringify(DOCVERIFY)}\n\n`;
+
+async function mockApiDocVerify(page: Page) {
+  await page.route('**/api/**', async (route) => {
+    const path = new URL(route.request().url()).pathname.replace(/^\/api/, '');
+    const method = route.request().method();
+    if (method === 'GET' && path === '/projects') return json(route, [PROJECT]);
+    if (method === 'GET' && path === '/projects/p1/files') return json(route, [FILE]);
+    if (method === 'GET' && path === '/projects/p1/snapshots') return json(route, []);
+    if (method === 'GET' && path === '/files/f1') return json(route, { ...FILE, content: '\\begin{equation}\n(x+1)^2 = x^2 + 2x + 2\n\\end{equation}\n' });
+    if (method === 'PATCH' && path === '/files/f1') return json(route, { content: '' });
+    if (method === 'GET' && path === '/ai/status') return json(route, { available: true });
+    if (method === 'POST' && path === '/projects/p1/coderive') {
+      return route.fulfill({ status: 200, contentType: 'text/event-stream', body: DOCVERIFY_SSE });
+    }
+    return json(route, { error: `unmocked ${method} ${path}` }, 404);
+  });
+}
+
+test('verify-document shows SymPy verdicts + AI context with NO insert affordance', async ({ page }) => {
+  await mockApiDocVerify(page);
+  await page.goto('/');
+  await expect(page.locator('.cm-content')).toBeVisible();
+
+  await page.getByTestId('coderive').click();
+  await page.getByTestId('intent-verify-document').click();
+  await page.getByTestId('coderive-run').click();
+
+  const view = page.getByTestId('coderive-docverify');
+  await expect(view).toBeVisible();
+
+  // Totals summary reflects SymPy's whole-document sweep.
+  await expect(view).toContainText('SymPy checked 2 equation(s):');
+  await expect(view).toContainText('1 ✓');
+  await expect(view).toContainText('1 ✗');
+
+  // The failing equation is surfaced with its location, counterexample, and AI context.
+  const finding = page.getByTestId('docverify-finding');
+  await expect(finding).toHaveCount(1); // only the non-passing one is listed
+  await expect(finding).toContainText('✗ SymPy');
+  await expect(finding).toContainText('main.tex:7');
+  await expect(finding).toContainText('SymPy counterexample');
+  await expect(finding).toContainText('AI context (not a verdict):');
+  await expect(finding).toContainText('dropped constant term');
+
+  // CRITICAL: findings about existing algebra are NOT insertable — no buttons at all.
+  await expect(view.getByRole('button')).toHaveCount(0);
+  await expect(page.getByText('Insert anyway (unverified)')).toHaveCount(0);
+  await expect(page.getByText('Insert (diff)')).toHaveCount(0);
+});

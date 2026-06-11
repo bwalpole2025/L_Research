@@ -23,7 +23,7 @@ export interface PendingDiff {
   to: number;
   original: string;
   replacement: string;
-  source: 'edit' | 'fix' | 'coderive';
+  source: 'edit' | 'fix' | 'coderive' | 'review';
   filePath: string;
   /** For a forced unverified/unknown co-derive insert: underline `warnText` with this tooltip on accept. */
   unverifiedMessage?: string;

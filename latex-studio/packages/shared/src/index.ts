@@ -726,7 +726,7 @@ export interface PreSubmitSummary {
 
 // ─── Co-derivation engine (LLM proposes · SymPy verifies — SymPy is the arbiter) ─
 
-export type CoderiveIntent = 'fill-gap' | 'next-step' | 'reach-goal' | 'justify';
+export type CoderiveIntent = 'fill-gap' | 'next-step' | 'reach-goal' | 'justify' | 'verify-document';
 
 export interface CoderiveAnchorRange {
   /** Primary line: next-step cursor / reach-goal current / fill-gap line A / justify "from". */
@@ -736,9 +736,11 @@ export interface CoderiveAnchorRange {
 }
 
 export interface CoderiveRequest {
-  fileId: string;
+  /** Required for the generative intents; omitted for "verify-document" (whole document). */
+  fileId?: string;
   intent: CoderiveIntent;
-  anchorRange: CoderiveAnchorRange;
+  /** Required for the generative intents; omitted for "verify-document". */
+  anchorRange?: CoderiveAnchorRange;
   /** Target expression for "reach-goal". */
   target?: string;
   /** Live editor buffers so context + anchors reflect unsaved edits. */
@@ -882,6 +884,35 @@ export interface CoderiveResponse {
   context: ContextBundleSummary;
   rounds: CoderiveRound[];
   anchors: { from?: string; to?: string; goal?: string };
+  /** Present only for the "verify-document" intent (whole-document SymPy sweep). */
+  documentVerification?: DocumentVerification;
+}
+
+/**
+ * AI commentary on ONE audited equation. Context only — explicitly NOT a verdict.
+ * SymPy's verdict on the same equation (in the report) is the authoritative call;
+ * this never changes it.
+ */
+export interface DocAuditComment {
+  /** Matches a MathAuditBlock.id in the report. */
+  id: string;
+  comment: string;
+}
+
+/**
+ * Whole-document algebra check for co-derive's "verify-document" mode. The report
+ * is the machine-checked truth (SymPy over every display equation, the same
+ * guarded engine the Maths Audit uses — bibliography is never scanned). The AI
+ * supplies context for the equations SymPy could not pass; it is the arbiter of
+ * nothing.
+ */
+export interface DocumentVerification {
+  report: MathAuditReport;
+  /** AI context for non-passing equations (may be empty when the model is unavailable). */
+  comments: DocAuditComment[];
+  commentaryProvided: boolean;
+  /** How many equations were sent for AI commentary (bounded). */
+  commentedCount: number;
 }
 
 // ─── Document Review (compose the engines → annotated review PDF) ─────────────
@@ -957,16 +988,21 @@ export interface ReviewStyle {
   machineVerified: boolean;
 }
 
+// Colour scheme (machine-certain categories are green + red; LLM judgements are
+// yellow; grey is an honest "couldn't decide"):
+//  · wrong equation (SymPy-refuted algebra) → light green
+//  · wrong statement (literature/background/prose LLM) → light yellow
+//  · wrong grammar/spelling (deterministic en-GB) → red (drawn as an underline)
 export function reviewStyle(axis: ReviewAxis, confidence: ReviewConfidence): ReviewStyle {
   if (axis === 'maths' && confidence === 'refuted')
-    return { colour: 'red', hex: '#ef4444', rgb: [0.94, 0.27, 0.27], label: 'SymPy-verified algebra error', machineVerified: true };
+    return { colour: 'light green', hex: '#86efac', rgb: [0.53, 0.94, 0.67], label: 'SymPy-verified algebra error', machineVerified: true };
   if (axis === 'maths')
     return { colour: 'grey', hex: '#9ca3af', rgb: [0.61, 0.64, 0.69], label: 'SymPy could not decide (unknown) — not an error and not a pass', machineVerified: false };
-  if (axis === 'literature')
-    return { colour: 'orange', hex: '#f97316', rgb: [0.98, 0.45, 0.09], label: 'LLM judgement — verify against the cited source', machineVerified: false };
-  if (axis === 'background')
-    return { colour: 'purple', hex: '#a855f7', rgb: [0.66, 0.33, 0.97], label: 'LLM judgement, low confidence — verify against a real source', machineVerified: false };
   if (confidence === 'verified-typo')
-    return { colour: 'blue', hex: '#3b82f6', rgb: [0.23, 0.51, 0.96], label: 'Deterministic spell-check (en-GB)', machineVerified: true };
+    return { colour: 'red', hex: '#ef4444', rgb: [0.94, 0.27, 0.27], label: 'Deterministic spell/grammar (en-GB)', machineVerified: true };
+  if (axis === 'literature')
+    return { colour: 'light yellow', hex: '#fde68a', rgb: [0.99, 0.9, 0.54], label: 'LLM judgement — verify against the cited source', machineVerified: false };
+  if (axis === 'background')
+    return { colour: 'light yellow', hex: '#fde68a', rgb: [0.99, 0.9, 0.54], label: 'LLM judgement, low confidence — verify against a real source', machineVerified: false };
   return { colour: 'light yellow', hex: '#fde68a', rgb: [0.99, 0.9, 0.54], label: 'LLM prose suggestion — may be wrong', machineVerified: false };
 }

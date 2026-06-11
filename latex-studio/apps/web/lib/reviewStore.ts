@@ -4,6 +4,7 @@ import { create } from 'zustand';
 import { api, ApiError } from './api';
 import { useEditorStore } from './store';
 import { useAiStore } from './aiStore';
+import { editorController } from './editorController';
 import type { AuditScope, FileOverrides, ReviewAxis, ReviewConfidence, ReviewFinding, ReviewTotals } from './types';
 
 export type PdfMode = 'clean' | 'review' | 'literature';
@@ -37,8 +38,11 @@ interface ReviewState {
   lastScope: AuditScope;
 
   runReview: (scope: AuditScope) => Promise<void>;
+  compileAndCheck: () => Promise<void>;
   jumpTo: (finding: ReviewFinding) => void;
   explain: (finding: ReviewFinding) => void;
+  applyCorrection: (finding: ReviewFinding) => Promise<void>;
+  canCorrect: (finding: ReviewFinding) => boolean;
   setPdfMode: (m: PdfMode) => void;
   toggleAxis: (a: ReviewAxis) => void;
   toggleConfidence: (c: ReviewConfidence) => void;
@@ -82,11 +86,59 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
     }
   },
 
+  // One-shot "Compile & Check": compile, then (on success) run the check.
+  async compileAndCheck() {
+    const ed = useEditorStore.getState();
+    await ed.compileProject();
+    if (useEditorStore.getState().compileStatus === 'success') {
+      await get().runReview(get().lastScope);
+    }
+  },
+
   jumpTo(finding) {
     const ed = useEditorStore.getState();
     void ed.revealLocation(finding.file, finding.lineSpan.fromLine);
     void ed.locateInPdfAt(finding.file, finding.lineSpan.fromLine);
     if (get().reviewPdfUrl) set({ pdfMode: 'review' });
+  },
+
+  // A correction is only offered when we can place it precisely: a suggestion AND
+  // an exact token (quotedSpan, e.g. the misspelled word) to replace. We never
+  // blind-replace a whole line from an LLM suggestion.
+  canCorrect(finding) {
+    return Boolean(finding.suggestion && finding.quotedSpan);
+  },
+
+  async applyCorrection(finding) {
+    if (!get().canCorrect(finding)) return;
+    const ed = useEditorStore.getState();
+    const file = ed.files.find((f) => f.path === finding.file);
+    if (!file) {
+      set({ error: `Cannot locate ${finding.file} to apply the correction.` });
+      return;
+    }
+    if (file.id !== ed.activeFileId) {
+      await ed.openFile(file.id);
+      ed.setActive(file.id);
+      await new Promise((r) => requestAnimationFrame(() => r(null)));
+    }
+    const line = finding.lineSpan.fromLine;
+    const range = editorController.lineRange(line);
+    const original = editorController.lineText(line);
+    if (!range || original == null) {
+      set({ error: 'Could not read the line to correct.' });
+      return;
+    }
+    const target = finding.quotedSpan!;
+    if (!original.includes(target)) {
+      set({ error: `The text "${target}" is no longer on line ${line} — re-run the check.` });
+      return;
+    }
+    const replacement = original.replace(target, finding.suggestion!);
+    if (replacement === original) return;
+    // Goes through the same approve/reject merge view as every other AI edit —
+    // nothing is written to the document without the user accepting.
+    useAiStore.getState().openDiff({ from: range.from, to: range.to, original, replacement, source: 'review', filePath: finding.file });
   },
 
   explain(finding) {

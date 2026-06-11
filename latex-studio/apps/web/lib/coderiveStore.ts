@@ -7,11 +7,12 @@ import { useAiStore } from './aiStore';
 import { editorController } from './editorController';
 import type { CoderiveCandidate, CoderiveIntent, CoderiveResponse, CoderiveRound, FileOverrides } from './types';
 
-export const INTENTS: { id: CoderiveIntent; label: string; help: string; needsRange: boolean; needsTarget: boolean }[] = [
+export const INTENTS: { id: CoderiveIntent; label: string; help: string; needsRange: boolean; needsTarget: boolean; wholeDocument?: boolean }[] = [
   { id: 'fill-gap', label: 'Fill gap', help: 'Select line A and a later line C — propose intermediate step(s) B with A → B → C verified.', needsRange: true, needsTarget: false },
   { id: 'next-step', label: 'Next step', help: 'At the cursor — propose the next line of the derivation.', needsRange: false, needsTarget: false },
   { id: 'reach-goal', label: 'Reach goal', help: 'Give a target expression — propose a verified chain from the current line to it.', needsRange: false, needsTarget: true },
   { id: 'justify', label: 'Justify', help: 'Select an existing transition — name the algebraic technique connecting the two lines.', needsRange: true, needsTarget: false },
+  { id: 'verify-document', label: 'Verify document', help: 'No selection needed — SymPy checks every equation in the document; the AI adds context for the ones it cannot pass.', needsRange: false, needsTarget: false, wholeDocument: true },
 ];
 
 function buildOverrides(): FileOverrides {
@@ -30,6 +31,7 @@ interface CoderiveState {
   intent: CoderiveIntent;
   target: string;
   running: boolean;
+  progress: string | null;
   rounds: CoderiveRound[];
   response: CoderiveResponse | null;
   error: string | null;
@@ -51,6 +53,7 @@ export const useCoderiveStore = create<CoderiveState>((set, get) => ({
   intent: 'fill-gap',
   target: '',
   running: false,
+  progress: null,
   rounds: [],
   response: null,
   error: null,
@@ -64,8 +67,29 @@ export const useCoderiveStore = create<CoderiveState>((set, get) => ({
 
   async run() {
     const ed = useEditorStore.getState();
-    if (!ed.projectId || !ed.activeFileId) return;
+    if (!ed.projectId) return;
     const { intent, target } = get();
+
+    // Whole-document verification needs no anchor, no active file, no selection.
+    if (intent === 'verify-document') {
+      controller?.abort();
+      controller = new AbortController();
+      set({ dialogOpen: false, running: true, progress: 'verifying equations with SymPy', rounds: [], response: null, error: null, fileId: null, anchorRange: null });
+      await streamCoderive(
+        ed.projectId,
+        { intent, overrides: buildOverrides() },
+        {
+          onRound: () => {},
+          onProgress: (stage) => set({ progress: stage }),
+          onResult: (response) => set({ response, running: false, progress: null }),
+          onError: (_kind, message) => set({ error: message, running: false, progress: null }),
+        },
+        controller.signal,
+      );
+      return;
+    }
+
+    if (!ed.activeFileId) return;
 
     const sel = editorController.getSelectionLines();
     const cursor = editorController.getCursor();

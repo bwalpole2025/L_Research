@@ -17,3 +17,10 @@ pytest>=8.2
 
 # Review-PDF annotation (AGPL-3.0; OK for single-user local use — ADR-009)
 pymupdf>=1.24
+
+# Local sentence embeddings for the RAG document check. Offline after a one-time
+# model-weights download from Hugging Face on first use (see README runbook); the
+# model (BAAI/bge-small-en-v1.5, 384-dim) is then cached on disk and nothing
+# leaves the machine. Pulls in a CPU build of torch.
+sentence-transformers>=3.0
+torch>=2.2

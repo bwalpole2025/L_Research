@@ -12,6 +12,27 @@ consistent, and verifies individual identities.
 | `POST /parse` | `{latex, macros?}` | `{ok, sympySrepr, prettyPrinted, parser, error?}` |
 | `POST /equivalent` | `{lhs, rhs, assumptions?, macros?}` | `{equivalent: true\|false\|"unknown", method, counterexample?}` |
 | `POST /check-derivation` | `{steps:[latex…], assumptions?, macros?}` | per-adjacent-pair verdicts + `firstFailingPair` |
+| `POST /annotate-pdf` | `{pdf_base64, findings[]}` | annotated review PDF (PyMuPDF) |
+| `POST /extract-pdf` | `{pdf_base64}` | `{text, pageCount, title?, author?}` |
+| `POST /embed` | `{texts:[…]}` | `{vectors:[[float…]…], model, dim}` — local sentence embeddings |
+| `GET /embed/health` | — | `{available, model, dim}` |
+
+## Embeddings (RAG document check)
+
+`/embed` returns L2-normalised sentence embeddings used by the RAG-grounded
+document check (indexing the reference library + embedding queries). It runs
+**entirely locally** via `sentence-transformers` with **`BAAI/bge-small-en-v1.5`**
+(384-dim) — a small, strong general English retrieval model that holds up on
+scientific prose. Vectors are unit-length, so a dot product equals cosine
+similarity, matching pgvector's `<=>` operator at query time.
+
+**Runbook — one-time model download.** The model **weights download once from
+Hugging Face on first use** (`POST /embed` or `GET /embed/health`). This is the
+*only* network step in this service; afterwards the weights are cached on disk
+(`HF_HOME=/service/.hf_cache` in the image) and nothing leaves the machine. The
+Dockerfile installs a **CPU-only** build of torch. To pre-bake the weights into
+the image for a fully offline first run, uncomment the `SentenceTransformer(...)`
+line in the Dockerfile. Override the model with the `EMBED_MODEL` env var.
 
 ## Verification strategy (with the winning `method` reported)
 

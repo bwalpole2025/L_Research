@@ -42,6 +42,18 @@ function readBraced(s: string, openIndex: number): { body: string; end: number }
   return { body: s.slice(openIndex + 1), end: s.length };
 }
 
+/** Normalise a macro body so it is parseable maths: unwrap typeset-only wrappers
+ *  (\ensuremath, \mbox/$…$, \text) that a CAS cannot read but that appear in
+ *  class-file definitions like `\newcommand\p{\ensuremath{\partial}}`. */
+function normalizeMacroBody(body: string): string {
+  return body
+    .replace(/\\ensuremath\s*\{([^{}]*)\}/g, '$1')
+    .replace(/\\(?:mbox|hbox)\s*\{\s*\$([^$]*)\$\s*\}/g, '$1')
+    .replace(/\\(?:mbox|text|textrm|hbox)\s*\{([^{}]*)\}/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 /** Collect \newcommand/\def/\DeclareMathOperator macros across the project's text. */
 export function collectMacros(files: FileInput[], projectMacros: Record<string, string>): Record<string, string> {
   const out: Record<string, string> = {};
@@ -54,7 +66,7 @@ export function collectMacros(files: FileInput[], projectMacros: Record<string, 
       const name = m[1] ?? m[2] ?? m[3];
       const { body, end } = readBraced(f.content, MACRO_START.lastIndex - 1);
       MACRO_START.lastIndex = end;
-      if (name && !(name in out)) out[name] = body.replace(/\s+/g, ' ').trim();
+      if (name && !(name in out)) out[name] = normalizeMacroBody(body);
     }
   }
   return out;

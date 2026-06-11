@@ -27,6 +27,8 @@ interface AnnotateItem {
   page: number;
   rects: [number, number, number, number][];
   color: [number, number, number];
+  /** 'highlight' (equations/statements) or 'underline' (grammar/spelling — drawn red). */
+  style: 'highlight' | 'underline';
   popup: string;
   indexLabel: string;
 }
@@ -50,6 +52,7 @@ export async function annotatePdf(
       page: c.page,
       rects: c.rects.map((r) => [r.x0, r.y0, r.x1, r.y1]),
       color: style.rgb,
+      style: f.confidence === 'verified-typo' ? 'underline' : 'highlight',
       popup: buildPopup(f, c.approximate),
       indexLabel: `${f.severity} · ${f.message.slice(0, 90)}`,
     });

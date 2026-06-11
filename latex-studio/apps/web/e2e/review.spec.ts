@@ -13,7 +13,7 @@ const REVIEW = {
     { id: 'l1', axis: 'literature', category: 'constant', severity: 'error', confidence: 'llm-judgement', file: 'main.tex', lineSpan: { fromLine: 4, toLine: 4 }, message: 'The constant 3 contradicts the cited source.', reference: 'cornish2018', quotedSpan: 'the value is 2.5' },
     { id: 'l2', axis: 'literature', category: 'attribution-unverified', severity: 'info', confidence: 'llm-judgement', file: 'main.tex', lineSpan: { fromLine: 10, toLine: 10 }, message: 'Attribution unverified: the source text for [ghostref] is not in the project.', reference: 'ghostref' },
     { id: 'b1', axis: 'background', category: 'identity', severity: 'warning', confidence: 'llm-judgement-low', file: 'main.tex', lineSpan: { fromLine: 4, toLine: 4 }, message: 'This contradicts a standard identity.' },
-    { id: 's1', axis: 'prose', category: 'spelling', severity: 'warning', confidence: 'verified-typo', file: 'main.tex', lineSpan: { fromLine: 9, toLine: 9 }, message: 'Possible spelling mistake: "misspeld"', suggestion: 'misspelled' },
+    { id: 's1', axis: 'prose', category: 'spelling', severity: 'warning', confidence: 'verified-typo', file: 'main.tex', lineSpan: { fromLine: 9, toLine: 9 }, message: 'Possible spelling mistake: "misspeld"', suggestion: 'misspelled', quotedSpan: 'misspeld' },
   ],
   totals: { byAxis: { maths: 1, literature: 2, background: 1, prose: 1 }, bySeverity: { error: 2, warning: 2, info: 1 }, byConfidence: {}, refutedMaths: 1 },
   annotated: true,
@@ -63,11 +63,13 @@ test('document review surfaces four-axis findings with the honesty distinction a
   await expect(page.getByText(/“the value is 2.5”/)).toBeVisible();
   // Attribution unverified, not a contradiction.
   await expect(page.getByText(/Attribution unverified: the source text for \[ghostref\]/)).toBeVisible();
-  // The honesty footer.
-  await expect(page.getByText(/Only red \(algebra\) and blue \(spelling\) are machine-verified/)).toBeVisible();
+  // The honesty footer (recoloured scheme: green = wrong equation, red = grammar).
+  await expect(page.getByText(/Green \(wrong equation, SymPy\) and red \(grammar\/spelling/)).toBeVisible();
 
   // Clean/Review PDF toggle appears once an annotated review exists.
   await expect(page.getByTestId('pdf-review')).toBeVisible();
+  // The one-shot Compile & Check action is offered.
+  await expect(page.getByTestId('compile-and-check')).toBeVisible();
 
   // Filter by axis.
   await page.getByRole('button', { name: 'literature 2' }).click();
@@ -78,4 +80,11 @@ test('document review surfaces four-axis findings with the honesty distinction a
   // "Explain" opens the scoped chat (the in-app error → LLM link).
   await page.getByRole('button', { name: 'Explain' }).first().click();
   await expect(page.getByTestId('toggle-chat')).toHaveAttribute('aria-pressed', 'true');
+
+  // A precise correction (spelling word + suggestion) is offered as Apply, and
+  // accepting goes through the approve/reject diff — nothing changes silently.
+  const apply = page.getByTestId('apply-correction');
+  await expect(apply).toBeVisible();
+  await apply.click();
+  await expect(page.getByTestId('diff-accept')).toBeVisible();
 });

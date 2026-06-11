@@ -1,6 +1,6 @@
 'use client';
 
-import { CircleAlert, FileSearch, Info, Loader2, Play, Sparkles, TriangleAlert } from 'lucide-react';
+import { CircleAlert, FileSearch, Info, Loader2, Play, Sparkles, TriangleAlert, Wand2 } from 'lucide-react';
 import { reviewStyle } from '@latex-studio/shared';
 import { useReviewStore } from '@/lib/reviewStore';
 import type { ReviewAxis, ReviewFinding, ReviewSeverity } from '@/lib/types';
@@ -19,6 +19,8 @@ function fmtCx(cx: NonNullable<ReviewFinding['counterexample']>): string {
 function Row({ finding }: { finding: ReviewFinding }) {
   const jumpTo = useReviewStore((s) => s.jumpTo);
   const explain = useReviewStore((s) => s.explain);
+  const applyCorrection = useReviewStore((s) => s.applyCorrection);
+  const canCorrect = useReviewStore((s) => s.canCorrect);
   const style = reviewStyle(finding.axis, finding.confidence);
   const Icon = SEV_ICON[finding.severity];
 
@@ -48,6 +50,17 @@ function Row({ finding }: { finding: ReviewFinding }) {
             >
               <Sparkles className="h-3 w-3" /> Explain
             </button>
+            {canCorrect(finding) && (
+              <button
+                type="button"
+                data-testid="apply-correction"
+                onClick={() => void applyCorrection(finding)}
+                title={`Replace “${finding.quotedSpan}” with “${finding.suggestion}” — opens a diff to approve`}
+                className="inline-flex items-center gap-1 rounded border border-emerald-300 px-1.5 py-0.5 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-500/40 dark:text-emerald-300 dark:hover:bg-emerald-500/10"
+              >
+                <Wand2 className="h-3 w-3" /> Apply…
+              </button>
+            )}
           </div>
           <p className="mt-0.5 text-[11px] text-zinc-400">{style.label}</p>
           {finding.suggestion && <p className="text-[11px] text-emerald-600 dark:text-emerald-400">Suggestion: {finding.suggestion}</p>}
@@ -72,6 +85,7 @@ export function ReviewPanel() {
   const confidenceFilter = useReviewStore((s) => s.confidenceFilter);
   const toggleAxis = useReviewStore((s) => s.toggleAxis);
   const runReview = useReviewStore((s) => s.runReview);
+  const compileAndCheck = useReviewStore((s) => s.compileAndCheck);
   const reviewOnCompile = useReviewStore((s) => s.reviewOnCompile);
   const setReviewOnCompile = useReviewStore((s) => s.setReviewOnCompile);
 
@@ -93,6 +107,16 @@ export function ReviewPanel() {
           className="inline-flex h-7 items-center gap-1 rounded-md border border-zinc-200 bg-white px-2 font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
         >
           <FileSearch className="h-3 w-3" /> Project
+        </button>
+        <button
+          type="button"
+          data-testid="compile-and-check"
+          onClick={() => void compileAndCheck()}
+          disabled={running}
+          title="Compile, then check the fresh PDF — highlights map onto the new compile"
+          className="inline-flex h-7 items-center gap-1 rounded-md border border-blue-300 bg-blue-50 px-2 font-medium text-blue-700 hover:bg-blue-100 disabled:opacity-50 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-blue-300"
+        >
+          <Play className="h-3 w-3" /> Compile &amp; Check
         </button>
         {totals && (
           <span className="flex items-center gap-2 text-zinc-400">
@@ -146,8 +170,9 @@ export function ReviewPanel() {
         </ul>
         {totals && (
           <p className="px-3 py-2 text-[11px] text-zinc-400">
-            Only red (algebra) and blue (spelling) are machine-verified. Orange, purple and yellow are LLM judgements that may be wrong
-            either way — check them. No red means SymPy found no algebra errors in what it could parse, not that the document is correct.
+            Green (wrong equation, SymPy) and red (grammar/spelling, en-GB) are machine-verified. Yellow statements are LLM judgements
+            that may be wrong either way — check them. No green means SymPy found no algebra error in what it could parse, not that the
+            document is correct. Corrections open a diff for you to approve; nothing is changed without you accepting.
           </p>
         )}
       </div>

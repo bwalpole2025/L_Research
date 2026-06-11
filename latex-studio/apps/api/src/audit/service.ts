@@ -10,7 +10,35 @@ import {
   type VerificationCandidate,
 } from '@latex-studio/shared';
 import { checkDerivation, checkEquivalent, parseExpression } from '../coderive/mathcheck.js';
-import { type MathBlock, extractMathBlocks, isBibliographyFile, splitEquation } from './extract.js';
+import { type MathBlock, bareMath, extractMathBlocks, isBibliographyFile, splitEquation } from './extract.js';
+
+/** The left-hand side an align row is keyed on: text before `&`, else before the first `=`. */
+function lhsOf(latex: string): string {
+  const amp = latex.indexOf('&');
+  if (amp >= 0) return latex.slice(0, amp).replace(/\s+/g, '');
+  const split = splitEquation(latex);
+  return split ? split.lhs.replace(/\s+/g, '') : '';
+}
+
+/**
+ * True only for a GENUINE derivation chain — consecutive re-expressions of the
+ * same quantity (same repeated LHS, or empty `&= …` continuations). An align that
+ * merely groups separate definitions (different LHSs: r=…, θ=…, z=…) is NOT a
+ * chain, so its rows must not be compared as transitions. A refutation (✗) is only
+ * meaningful inside a real chain.
+ */
+function isContinuationChain(latexes: string[]): boolean {
+  if (latexes.length < 2) return false;
+  const lhss = latexes.map(lhsOf).filter((x) => x.length > 0);
+  return new Set(lhss).size <= 1; // all the same LHS (or all empty continuations)
+}
+
+/** A pure inequality / domain constraint (relational operators, no verifiable `=`). */
+function isConstraintLine(latex: string): boolean {
+  const bare = bareMath(latex);
+  if (splitEquation(latex)) return false; // it has an `=` to verify
+  return /\\(?:leq|geq|le|ge|in|subset|subseteq|supset|neq|sim|approx|ll|gg)\b|[<>]/.test(bare);
+}
 
 export interface AuditInputFile {
   path: string;
@@ -147,26 +175,40 @@ async function auditBlock(block: MathBlock, ctx: BlockCtx): Promise<BlockOutcome
     ...extra,
   });
 
-  // Maths guard before EVERY mathcheck call. A step the guard refuses (prose or
-  // bibliography text inside a math env) is reported honestly as unknown —
-  // never silently dropped, and never sent to the verifier.
+  // Classify each step. Honestly skip — never flag as an error — anything that is
+  // not a scalar identity: matrix/piecewise constructs, prose/bibliography the
+  // maths guard refuses, and inequality/domain constraints.
   const rejectedRows: MathAuditBlock[] = [];
   const kept: GuardedStep[] = [];
   for (const step of block.steps) {
+    if (step.kind === 'matrix') {
+      rejectedRows.push(
+        row(step, 'unknown', { method: 'matrix-or-piecewise', message: 'matrix / piecewise construct — not checkable as a scalar identity' }),
+      );
+      continue;
+    }
     const made = makeVerificationCandidate(step.latex, 'display-math');
     if (made.rejected !== undefined) {
       rejectedRows.push(
         row(step, 'unknown', { method: 'non-math-skipped', message: `not a maths expression (${made.rejected}) — not sent to the verifier` }),
       );
-    } else {
-      kept.push({ step, cand: made.candidate });
+      continue;
     }
+    if (isConstraintLine(step.latex)) {
+      rejectedRows.push(
+        row(step, 'unknown', { method: 'not-an-identity', message: 'inequality / domain constraint — not an identity to verify' }),
+      );
+      continue;
+    }
+    kept.push({ step, cand: made.candidate });
   }
   const byLine = (a: MathAuditBlock, b: MathAuditBlock): number => a.lineStart - b.lineStart;
   if (kept.length === 0) return { rows: rejectedRows.sort(byLine), cached: false, called: false };
 
-  // Multi-step block ⇒ derivation (over the guard-passed steps).
-  if (kept.length >= 2) {
+  // A GENUINE derivation chain (≥2 consecutive re-expressions of the same
+  // quantity) is the ONLY place a refutation (✗) is meaningful — a broken
+  // transition there is a real algebra error.
+  if (kept.length >= 2 && isContinuationChain(kept.map((k) => k.step.latex))) {
     const key = `der|${kept.map((k) => norm(k.cand.latex)).join('§')}|${ctx.assumptions}|${ctx.mk}`;
     let result = cacheGet<DerivationResult>(key);
     const cached = result !== undefined;
@@ -197,8 +239,36 @@ async function auditBlock(block: MathBlock, ctx: BlockCtx): Promise<BlockOutcome
     return { rows: [...rows, ...rejectedRows].sort(byLine), cached, called };
   }
 
-  // Single step.
-  const { step, cand } = kept[0]!;
+  // Otherwise audit each equation INDEPENDENTLY (separate definitions / governing
+  // equations, not a chain). A standalone equation whose two sides are not
+  // symbolically equal is almost always a definition — reported 'unknown', NEVER
+  // 'failing'.
+  let anyCalled = false;
+  let anyCached = false;
+  const rows: MathAuditBlock[] = [];
+  for (const { step, cand } of kept) {
+    const out = await auditEquation(step, cand, ctx, row);
+    anyCalled = anyCalled || out.called;
+    anyCached = anyCached || out.cached;
+    rows.push(out.row);
+  }
+  return { rows: [...rows, ...rejectedRows].sort(byLine), cached: anyCached, called: anyCalled };
+}
+
+type RowFn = (step: { latex: string; line: number }, verdict: MathAuditVerdict, extra?: Partial<MathAuditBlock>) => MathAuditBlock;
+
+/**
+ * Audit ONE standalone equation. ✓ only if SymPy PROVES the two sides equal;
+ * if they are not equal we report 'unknown' (a definition/governing equation is
+ * expected to have unequal sides), never 'failing'. A lone non-equation
+ * expression gets a parse check.
+ */
+async function auditEquation(
+  step: { latex: string; line: number },
+  cand: VerificationCandidate,
+  ctx: BlockCtx,
+  row: RowFn,
+): Promise<{ row: MathAuditBlock; called: boolean; cached: boolean }> {
   const split = splitEquation(step.latex);
   const lhs = split ? makeVerificationCandidate(split.lhs, 'display-math') : undefined;
   const rhs = split ? makeVerificationCandidate(split.rhs, 'display-math') : undefined;
@@ -216,19 +286,21 @@ async function auditBlock(block: MathBlock, ctx: BlockCtx): Promise<BlockOutcome
         result = { equivalent: 'unknown', method: 'timeout' };
       }
     }
-    const verdict: MathAuditVerdict =
-      result.equivalent === true ? 'passed' : result.equivalent === false ? 'failing' : 'unknown';
+    if (result.equivalent === true) {
+      return { row: row(step, 'passed', { method: result.method, cached }), called, cached };
+    }
+    const message =
+      result.equivalent === false
+        ? 'the two sides are not symbolically equal — expected for a definition or governing equation, so not flagged as an error'
+        : undefined;
     return {
-      rows: [
-        row(step, verdict, {
-          method: result.method,
-          ...(result.counterexample ? { counterexample: result.counterexample } : {}),
-          cached,
-        }),
-        ...rejectedRows,
-      ].sort(byLine),
-      cached,
+      row: row(step, 'unknown', {
+        method: result.equivalent === false ? 'not-an-identity' : result.method,
+        ...(message ? { message } : {}),
+        cached,
+      }),
       called,
+      cached,
     };
   }
 
@@ -248,11 +320,8 @@ async function auditBlock(block: MathBlock, ctx: BlockCtx): Promise<BlockOutcome
     }
   }
   return {
-    rows: [
-      row(step, parseable ? 'passed' : 'unknown', { method: parseable ? 'well-formed' : 'unparseable', cached }),
-      ...rejectedRows,
-    ].sort(byLine),
-    cached,
+    row: row(step, parseable ? 'passed' : 'unknown', { method: parseable ? 'well-formed' : 'unparseable', cached }),
     called,
+    cached,
   };
 }

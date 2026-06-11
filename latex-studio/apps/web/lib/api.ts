@@ -325,6 +325,7 @@ export async function streamCoderive(
     onRound: (r: CoderiveRound) => void;
     onResult: (r: CoderiveResponse) => void;
     onError: (kind: AiErrorKind, message: string) => void;
+    onProgress?: (stage: string) => void;
   },
   signal?: AbortSignal,
 ): Promise<void> {
@@ -378,6 +379,7 @@ export async function streamCoderive(
       }
       if (event === 'round') handlers.onRound(data as CoderiveRound);
       else if (event === 'result') handlers.onResult(data as CoderiveResponse);
+      else if (event === 'progress') handlers.onProgress?.((data as { stage: string }).stage);
       else if (event === 'error') {
         const e = data as { kind: AiErrorKind; message: string };
         handlers.onError(e.kind, e.message);

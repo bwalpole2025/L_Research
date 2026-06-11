@@ -1,6 +1,9 @@
 export interface MathStep {
   latex: string;
   line: number;
+  /** 'matrix' = contains a matrix/array/cases/piecewise construct: NOT a scalar
+   *  identity, so it must never be split into rows or refuted — only skipped. */
+  kind?: 'matrix';
 }
 
 export interface MathBlock {
@@ -24,16 +27,13 @@ const DISPLAY_ENVS = [
   'dmath',
 ];
 
-function isContentLine(text: string): boolean {
-  let t = text.trim();
-  if (!t) return false;
-  if (/^\\(?:begin|end)\b/.test(t)) return false;
-  t = t
+/** A row has math content once labels, breaks, alignment and whitespace are removed. */
+function rowHasContent(text: string): boolean {
+  const t = text
     .replace(/\\label\s*\{[^}]*\}/g, '')
     .replace(/\\(?:nonumber|notag)\b/g, '')
     .replace(/\\\\\*?/g, '')
-    .replace(/&/g, '')
-    .trim();
+    .replace(/[&\s]/g, '');
   return t.length > 0;
 }
 
@@ -41,12 +41,28 @@ function stripBreak(text: string): string {
   return text.replace(/\\\\\*?(?:\s*\[[^\]]*\])?\s*$/, '').trim();
 }
 
-/** Math content of a step with alignment/labels removed, for equation splitting. */
+// A nested matrix / array / cases / piecewise construct. Content containing one of
+// these is not a scalar identity and must never be torn into rows or refuted.
+const MATRIX_CONSTRUCT_RE =
+  /\\begin\s*\{(?:array|[bBpvV]?matrix|smallmatrix|cases|subarray|gathered)\}|\\left\s*\\?\{|\\(?:cases|substack)\b/;
+
+export function hasMatrixConstruct(text: string): boolean {
+  return MATRIX_CONSTRUCT_RE.test(text);
+}
+
+/** Math content of a step with alignment/labels/spacing/text removed, for splitting. */
 export function bareMath(text: string): string {
   return stripBreak(text)
     .replace(/\\label\s*\{[^}]*\}/g, '')
     .replace(/\\tag\s*\*?\s*\{[^}]*\}/g, '')
     .replace(/\\(?:nonumber|notag)\b/g, '')
+    // Unwrap \ensuremath{X} → X (macro bodies like \p = \ensuremath{\partial}).
+    .replace(/\\ensuremath\s*\{([^{}]*)\}/g, '$1')
+    // Drop typeset-text runs that are prose, not maths: \mbox{for } / \text{…}.
+    .replace(/\\(?:mbox|text|textrm|textsf|textit|textbf|hbox)\s*\{[^{}]*\}/g, ' ')
+    // Drop spacing commands that carry no mathematical meaning.
+    .replace(/\\(?:vspace|hspace)\s*\*?\s*\{[^{}]*\}/g, '')
+    .replace(/\\(?:quad|qquad|,|;|!|:|>)(?![a-zA-Z])/g, ' ')
     .replace(/&/g, '')
     .trim();
 }
@@ -91,16 +107,59 @@ function offsetToLine(lineStarts: number[], offset: number): number {
   return lo + 1; // 1-based
 }
 
+/**
+ * Split a display block's inner LaTeX into steps on TOP-LEVEL `\\` row breaks —
+ * i.e. `\\` that are NOT inside braces or a nested environment (array, matrix,
+ * cases, …). This keeps a matrix or piecewise definition together as ONE step
+ * instead of shredding it into rows and comparing its cells as bogus identities.
+ * A step containing such a construct is flagged kind:'matrix' so the auditor
+ * skips it rather than ever refuting it.
+ */
 function collectSteps(inner: string, innerStartOffset: number, lineStarts: number[]): MathStep[] {
   const steps: MathStep[] = [];
-  const lines = inner.split('\n');
-  let off = innerStartOffset;
-  for (const line of lines) {
-    if (isContentLine(line)) {
-      steps.push({ latex: stripBreak(line.trim()), line: offsetToLine(lineStarts, off) });
+  let depth = 0; // brace depth
+  let envDepth = 0; // nested \begin..\end depth
+  let start = 0;
+
+  const flush = (endIdx: number): void => {
+    const raw = inner.slice(start, endIdx);
+    if (rowHasContent(raw)) {
+      const lead = raw.length - raw.trimStart().length;
+      const off = innerStartOffset + start + lead;
+      const step: MathStep = { latex: stripBreak(raw.trim()), line: offsetToLine(lineStarts, off) };
+      if (hasMatrixConstruct(raw)) step.kind = 'matrix';
+      steps.push(step);
     }
-    off += line.length + 1;
+  };
+
+  let i = 0;
+  while (i < inner.length) {
+    if (inner.startsWith('\\begin{', i)) {
+      envDepth += 1;
+      i += 7;
+      continue;
+    }
+    if (inner.startsWith('\\end{', i)) {
+      envDepth = Math.max(0, envDepth - 1);
+      i += 5;
+      continue;
+    }
+    if (inner[i] === '\\' && inner[i + 1] === '\\') {
+      if (depth === 0 && envDepth === 0) {
+        flush(i);
+        i += 2;
+        start = i;
+        continue;
+      }
+      i += 2;
+      continue;
+    }
+    const c = inner[i];
+    if (c === '{') depth += 1;
+    else if (c === '}') depth = Math.max(0, depth - 1);
+    i += 1;
   }
+  flush(inner.length);
   return steps;
 }
 

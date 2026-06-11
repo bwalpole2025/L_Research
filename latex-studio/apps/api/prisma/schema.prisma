@@ -3,12 +3,14 @@
 // API layer and a localhost-only bind (see README).
 
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [vector]
 }
 
 model Project {
@@ -84,9 +86,34 @@ model LiteratureItem {
 
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
   folder  Folder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  chunks  LibraryChunk[]
 
   @@index([projectId])
   @@index([projectId, citeKey])
+}
+
+// A retrievable ~400–500-token passage of a LiteratureItem's extracted text, with
+// its LOCAL embedding (pgvector). Powers the RAG-grounded document check: a
+// physics/citation discrepancy may only be asserted when backed by a chunk
+// retrieved from here. The embedding column is queried via raw SQL (Prisma can't
+// type pgvector's `<=>` operator / op-class index). PDF bytes never live in PG —
+// only this extracted text does.
+model LibraryChunk {
+  id               String                     @id @default(cuid())
+  literatureItemId String
+  projectId        String
+  page             Int                        @default(0)
+  charStart        Int                        @default(0)
+  charEnd          Int                        @default(0)
+  text             String
+  embedding        Unsupported("vector(384)")
+  model            String                     @default("")
+  createdAt        DateTime                   @default(now())
+
+  item LiteratureItem @relation(fields: [literatureItemId], references: [id], onDelete: Cascade)
+
+  @@index([literatureItemId])
+  @@index([projectId])
 }
 
 // Soft-delete: deletes go here, not oblivion. payload holds enough to restore.

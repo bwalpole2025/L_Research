@@ -21,21 +21,19 @@ AXIS_ORDER = ["maths", "literature", "background", "prose"]
 SEV_ORDER = {"error": 0, "warning": 1, "info": 2}
 
 LEGEND_ROWS = [
-    ((0.94, 0.27, 0.27), "red", "SymPy-verified algebra error — machine-checked."),
+    ((0.53, 0.94, 0.67), "light green", "Wrong equation — SymPy-verified algebra error (machine-checked)."),
     ((0.61, 0.64, 0.69), "grey", "Maths SymPy could not decide (unknown) — NOT an error and NOT a pass."),
-    ((0.23, 0.51, 0.96), "blue", "Spelling — deterministic en-GB check (reliable)."),
-    ((0.98, 0.45, 0.09), "orange", "Literature consistency — LLM judgement; verify against the cited source."),
-    ((0.66, 0.33, 0.97), "purple", "Background knowledge — LLM judgement, LOW confidence; verify against a real source."),
-    ((0.99, 0.90, 0.54), "light yellow", "Prose suggestion — LLM; may be wrong."),
+    ((0.94, 0.27, 0.27), "red underline", "Wrong grammar/spelling — deterministic en-GB check (reliable)."),
+    ((0.99, 0.90, 0.54), "light yellow", "Wrong statement — LLM judgement; verify against the source (may be wrong)."),
 ]
 
 HONESTY = [
-    "Only RED and BLUE are machine-verified. ORANGE, PURPLE and YELLOW are LLM judgements",
-    "that may be wrong in either direction — false alarms AND missed real errors. Check them.",
+    "Only GREEN (algebra) and RED (spelling/grammar) are machine-verified. YELLOW statements are",
+    "LLM judgements that may be wrong in either direction — false alarms AND missed errors. Check them.",
     "",
-    "A review with no RED means SymPy found no algebra errors in what it could parse —",
-    "NOT that the document is correct. 'unknown' (grey) maths and unavailable references are",
-    "reported as such, never silently treated as fine. Nothing here edits your document.",
+    "No GREEN means SymPy found no algebra error in what it could parse — NOT that the document is",
+    "correct. 'unknown' (grey) maths and unavailable references are reported as such, never silently",
+    "treated as fine. Highlights mark where to look; apply any correction yourself, with approval.",
 ]
 
 
@@ -108,11 +106,12 @@ def annotate_pdf(pdf_b64: str, findings: list[dict[str, Any]]) -> dict[str, Any]
             continue
         page = doc[pno]
         color = f.get("color", [0.6, 0.6, 0.6])
+        underline = f.get("style") == "underline"  # grammar/spelling → red underline
         for raw in f.get("rects", []):
             rect = _rect(raw)
             if rect is None:
                 continue
-            annot = page.add_highlight_annot(rect)
+            annot = page.add_underline_annot(rect) if underline else page.add_highlight_annot(rect)
             try:
                 annot.set_colors(stroke=color)
             except Exception:  # noqa: BLE001
@@ -145,6 +144,13 @@ def extract_text(pdf_b64: str, max_pages: int = 400) -> dict[str, Any]:
     for i in range(pages):
         parts.append(doc[i].get_text("text"))
     text = "\n".join(parts)
+    # Char offset where each 1-based page begins in the concatenated text, so
+    # downstream chunking can recover the source page of any passage.
+    page_offsets: list[dict[str, int]] = []
+    cursor = 0
+    for i, part in enumerate(parts):
+        page_offsets.append({"page": i + 1, "charStart": cursor})
+        cursor += len(part) + 1  # +1 for the joining "\n"
     meta = doc.metadata or {}
     title = (meta.get("title") or "").strip()
     if not title:
@@ -156,4 +162,10 @@ def extract_text(pdf_b64: str, max_pages: int = 400) -> dict[str, Any]:
                 break
     n = doc.page_count
     doc.close()
-    return {"text": text, "pageCount": n, "title": title[:300], "author": (meta.get("author") or "").strip()[:300]}
+    return {
+        "text": text,
+        "pageCount": n,
+        "pageOffsets": page_offsets,
+        "title": title[:300],
+        "author": (meta.get("author") or "").strip()[:300],
+    }

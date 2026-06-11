@@ -51,7 +51,7 @@ function mockProvider(responses: string[]): ModelProvider {
 function recordMathcheck(): { bodies: string[]; restore: () => void } {
   const realFetch = globalThis.fetch;
   const bodies: string[] = [];
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  globalThis.fetch = (async (input: Parameters<typeof realFetch>[0], init?: Parameters<typeof realFetch>[1]) => {
     bodies.push(String(init?.body ?? ''));
     return realFetch(input, init);
   }) as typeof fetch;

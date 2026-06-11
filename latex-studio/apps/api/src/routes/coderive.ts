@@ -5,17 +5,22 @@ import { errorText } from '../providers/errors.js';
 import { markAiError, markAiOk } from '../ai/status.js';
 import { assembleBundle } from '../coderive/context.js';
 import { runCoderive } from '../coderive/engine.js';
+import { runDocumentVerification } from '../coderive/document.js';
+import { collectMacros } from '../docmodel/build.js';
 import { looksLikeMath } from '../coderive/anchors.js';
 import type { RefFile } from '../coderive/references.js';
 import { loadLibraryResolver } from '../literature/refs.js';
+import type { CoderiveResponse } from '@latex-studio/shared';
 
 const coderiveBody = z.object({
-  fileId: z.string(),
-  intent: z.enum(['fill-gap', 'next-step', 'reach-goal', 'justify']),
-  anchorRange: z.object({
-    fromLine: z.number().int().positive(),
-    toLine: z.number().int().positive().optional(),
-  }),
+  fileId: z.string().optional(),
+  intent: z.enum(['fill-gap', 'next-step', 'reach-goal', 'justify', 'verify-document']),
+  anchorRange: z
+    .object({
+      fromLine: z.number().int().positive(),
+      toLine: z.number().int().positive().optional(),
+    })
+    .optional(),
   target: z.string().max(4000).optional(),
   overrides: z.record(z.string(), z.string()).optional(),
 });
@@ -27,6 +32,91 @@ export async function coderiveRoutes(app: FastifyInstance): Promise<void> {
     const parsed = coderiveBody.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'Invalid body', details: parsed.error.flatten() });
 
+    const macros = (project.macros as Record<string, string> | null) ?? {};
+
+    // Load project files once (DB + live editor overrides).
+    const dbFiles = await app.prisma.texFile.findMany({
+      where: { projectId: project.id },
+      select: { path: true, content: true, encoding: true },
+    });
+    const map = new Map<string, RefFile>(dbFiles.map((f) => [f.path, { path: f.path, content: f.content, encoding: f.encoding }]));
+    if (parsed.data.overrides) {
+      for (const [p, c] of Object.entries(parsed.data.overrides)) map.set(p, { path: p, content: c, encoding: 'utf8' });
+    }
+    const files = [...map.values()];
+
+    // ── Whole-document verification (no anchor) ──────────────────────────────
+    // SymPy verifies every display equation across the document; the AI only
+    // adds context for the ones it could not pass — it decides no verdict. The
+    // guarded auditMaths excludes .bib/.bst and bibliography environments, so
+    // reference text can never reach the verifier here either.
+    if (parsed.data.intent === 'verify-document') {
+      const texFiles = files
+        .filter((f) => f.encoding !== 'base64' && /\.tex$/i.test(f.path))
+        .map((f) => ({ path: f.path, content: f.content }));
+      // Expand macros from the whole project (preamble + .sty/.cls, e.g. jfm.cls's
+      // `\newcommand\p{\ensuremath{\partial}}`), not just the (often empty) Settings
+      // table — otherwise macro-laden equations falsely read as "parse-error".
+      const docMacros = collectMacros(
+        files.filter((f) => f.encoding !== 'base64').map((f) => ({ path: f.path, content: f.content })),
+        macros,
+      );
+
+      reply.hijack();
+      const raw = reply.raw;
+      raw.writeHead(200, {
+        'content-type': 'text/event-stream',
+        'cache-control': 'no-store',
+        connection: 'keep-alive',
+        'x-accel-buffering': 'no',
+      });
+      const sse = (event: string, data: unknown) => raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      const ac = new AbortController();
+      request.raw.on('close', () => ac.abort());
+      const start = Date.now();
+      try {
+        const documentVerification = await runDocumentVerification(
+          texFiles,
+          {
+            mathcheckUrl: app.config.mathcheckUrl,
+            macros: docMacros,
+            assumptions: project.assumptions,
+            modelProvider: app.modelProvider,
+            model: project.model,
+            onProgress: (stage) => sse('progress', { stage }),
+          },
+          ac.signal,
+        );
+        markAiOk();
+        await app.prisma.aiCallLog
+          .create({ data: { projectId: project.id, route: 'coderive', model: project.model, latencyMs: Date.now() - start, ok: true } })
+          .catch(() => undefined);
+        const response: CoderiveResponse = {
+          intent: 'verify-document',
+          candidates: [],
+          skipped: [],
+          context: { macroCount: Object.keys(macros).length, assumptions: project.assumptions, documentWindowChars: 0, windowPreview: '', references: [] },
+          rounds: [],
+          anchors: {},
+          documentVerification,
+        };
+        sse('result', response);
+      } catch (err) {
+        const kind = classifyAiError(err);
+        markAiError(kind);
+        await app.prisma.aiCallLog
+          .create({ data: { projectId: project.id, route: 'coderive', model: project.model, latencyMs: Date.now() - start, ok: false, errorKind: kind } })
+          .catch(() => undefined);
+        sse('error', { kind, message: errorText(err) });
+      } finally {
+        raw.end();
+      }
+      return reply;
+    }
+
+    // ── Generative intents (need a .tex anchor) ──────────────────────────────
+    if (!parsed.data.fileId) return reply.code(400).send({ error: 'fileId is required for this intent' });
+    if (!parsed.data.anchorRange) return reply.code(400).send({ error: 'anchorRange is required for this intent' });
     const target = await app.prisma.texFile.findFirst({ where: { id: parsed.data.fileId, projectId: project.id } });
     if (!target) return reply.code(404).send({ error: 'file not found' });
 
@@ -40,17 +130,7 @@ export async function coderiveRoutes(app: FastifyInstance): Promise<void> {
       });
     }
 
-    const dbFiles = await app.prisma.texFile.findMany({
-      where: { projectId: project.id },
-      select: { path: true, content: true, encoding: true },
-    });
-    const map = new Map<string, RefFile>(dbFiles.map((f) => [f.path, { path: f.path, content: f.content, encoding: f.encoding }]));
-    if (parsed.data.overrides) {
-      for (const [p, c] of Object.entries(parsed.data.overrides)) map.set(p, { path: p, content: c, encoding: 'utf8' });
-    }
-    const files = [...map.values()];
     const targetContent = map.get(target.path)?.content ?? target.content;
-    const macros = (project.macros as Record<string, string> | null) ?? {};
     const ar = parsed.data.anchorRange;
     const range = ar.toLine !== undefined ? { fromLine: ar.fromLine, toLine: ar.toLine } : { fromLine: ar.fromLine };
 

@@ -8,6 +8,7 @@ import { runReview, reviewTotals } from '../review/engine.js';
 import { mapFindingsToPdf } from '../review/coords.js';
 import { annotatePdf } from '../review/annotate.js';
 import { loadLibraryResolver } from '../literature/refs.js';
+import { collectMacros } from '../docmodel/build.js';
 
 const reviewBody = z.object({
   scope: z.enum(['file', 'project']),
@@ -56,7 +57,12 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
       if (target) texFiles = texFiles.filter((f) => f.path === target.path);
     }
 
-    const macros = (project.macros as Record<string, string> | null) ?? {};
+    // Expand macros from the whole project (preamble + .sty/.cls, e.g. jfm.cls's
+    // `\p`), not just the Settings table — so macro-laden equations actually parse.
+    const macros = collectMacros(
+      allFiles.filter((f) => f.encoding !== 'base64').map((f) => ({ path: f.path, content: f.content })),
+      (project.macros as Record<string, string> | null) ?? {},
+    );
     const queryText = texFiles.map((f) => f.content).join('\n').slice(0, 8000);
     const libraryItems = await loadLibraryResolver(app.prisma, project.id);
     const references = await buildReferences(citedKeys(texFiles.map((f) => f.content)), allFiles, queryText, libraryItems);
@@ -105,12 +111,18 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
     } catch {
       pdfBuffer = null;
     }
-    if (pdfBuffer && findings.length > 0) {
-      const coords = await mapFindingsToPdf(findings, (file, line) =>
+    // Highlight only ACTIONABLE findings on the PDF — a wrong equation (green), a
+    // statement to check (yellow), or a grammar/spelling fix (red). "Unknown" maths
+    // (SymPy couldn't parse/decide) is NOT wrong, so it is listed in the panel but
+    // never highlighted — otherwise it would bury the real issues. This also avoids
+    // a SyncTeX lookup per unchecked equation.
+    const annotatable = findings.filter((f) => !(f.axis === 'maths' && f.confidence === 'unknown'));
+    if (pdfBuffer && annotatable.length > 0) {
+      const coords = await mapFindingsToPdf(annotatable, (file, line) =>
         app.compileService.forward(project.id, project.rootFile, file, line),
       );
       if (coords.size > 0) {
-        const result = await annotatePdf(app.config.mathcheckUrl, pdfBuffer.toString('base64'), findings, coords);
+        const result = await annotatePdf(app.config.mathcheckUrl, pdfBuffer.toString('base64'), annotatable, coords);
         if (result) {
           await writeFile(pdfPath.replace(/\.pdf$/, '.review.pdf'), Buffer.from(result.pdfBase64, 'base64'));
           annotated = true;

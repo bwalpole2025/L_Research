@@ -18,7 +18,10 @@ name: latex-studio
 
 services:
   postgres:
-    image: postgres:16-alpine
+    # pgvector/pgvector:pg16 = stock Postgres 16 + the `vector` extension, used by
+    # the RAG document check (LibraryChunk embeddings). Data-compatible with a
+    # plain postgres:16 data directory.
+    image: pgvector/pgvector:pg16
     restart: unless-stopped
     environment:
       POSTGRES_USER: latex

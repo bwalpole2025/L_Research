@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { CheckCircle2, CircleHelp, Loader2, XCircle } from 'lucide-react';
 import { useCoderiveStore } from '@/lib/coderiveStore';
-import type { CoderiveCandidate, CoderiveSkipped, CoderiveStatus, ContextBundleSummary } from '@/lib/types';
+import type { CoderiveCandidate, CoderiveSkipped, CoderiveStatus, ContextBundleSummary, DocumentVerification, MathAuditVerdict } from '@/lib/types';
 import { Markdown } from '../ai/Markdown';
 
 const BADGE: Record<CoderiveStatus, { icon: typeof CheckCircle2; cls: string; label: string }> = {
@@ -100,6 +100,83 @@ function SkippedList({ skipped }: { skipped: CoderiveSkipped[] }) {
   );
 }
 
+const AUDIT_BADGE: Record<MathAuditVerdict, { cls: string; label: string; icon: typeof CheckCircle2 }> = {
+  passed: { cls: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300', label: '✓ SymPy', icon: CheckCircle2 },
+  failing: { cls: 'bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-300', label: '✗ SymPy', icon: XCircle },
+  unknown: { cls: 'bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300', label: '? SymPy', icon: CircleHelp },
+};
+
+/**
+ * Whole-document verification ("verify-document" intent). SymPy's verdict on each
+ * equation is authoritative; the AI comment is context only. Deliberately has NO
+ * insert affordance — these are findings about existing algebra, not proposals.
+ */
+function DocumentVerificationView({ dv }: { dv: DocumentVerification }) {
+  const comments = new Map(dv.comments.map((c) => [c.id, c.comment]));
+  const t = dv.report.totals;
+  // Show the equations SymPy could not pass; passing ones are summarised in the totals.
+  const findings = dv.report.blocks.filter((b) => b.verdict !== 'passed');
+
+  return (
+    <div data-testid="coderive-docverify">
+      <div className="flex flex-wrap items-center gap-2 border-b border-zinc-100 px-3 py-2 text-[11px] dark:border-zinc-800">
+        <span className="font-medium text-zinc-500 dark:text-zinc-400">SymPy checked {t.checked} equation(s):</span>
+        <span className="text-emerald-600 dark:text-emerald-400">{t.passed} ✓</span>
+        <span className="text-red-600 dark:text-red-400">{t.failing} ✗</span>
+        <span className="text-amber-600 dark:text-amber-400">{t.unknown} ?</span>
+      </div>
+
+      {findings.length === 0 ? (
+        <p className="px-3 py-3 text-xs text-emerald-600 dark:text-emerald-400">
+          SymPy verified every equation it could parse. Nothing failed or was left undecided.
+        </p>
+      ) : (
+        <ul className="py-2">
+          {findings.map((b) => {
+            const badge = AUDIT_BADGE[b.verdict];
+            const Icon = badge.icon;
+            const comment = comments.get(b.id);
+            return (
+              <li
+                key={b.id}
+                data-testid="docverify-finding"
+                className="mx-2 mb-2 rounded-md border border-zinc-200 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-zinc-900/40"
+              >
+                <div className="flex items-center gap-2 text-[11px]">
+                  <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-medium ${badge.cls}`}>
+                    <Icon className="h-3 w-3" /> {badge.label}
+                  </span>
+                  <span className="font-mono text-zinc-400">
+                    {b.file}:{b.lineStart}
+                  </span>
+                  {b.method && <span className="text-zinc-400">{b.method}</span>}
+                </div>
+                <div className="mt-2 overflow-x-auto rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 dark:border-zinc-800 dark:bg-zinc-950">
+                  <Markdown content={`$$${b.latex}$$`} />
+                </div>
+                {b.verdict === 'failing' && b.counterexample && (
+                  <p className="mt-1 text-[11px] text-red-600 dark:text-red-400">SymPy counterexample — {fmtCx(b.counterexample)}</p>
+                )}
+                {comment && (
+                  <p className="mt-1 text-[11px] text-sky-700 dark:text-sky-300">
+                    <span className="font-medium">AI context (not a verdict):</span> {comment}
+                  </p>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+
+      <p className="px-3 py-2 text-[11px] text-zinc-400">
+        Every verdict here comes from SymPy, over the equations actually in your document — bibliography and prose are never sent to
+        the verifier. A ✗ means the two sides are not algebraically equal; a ? means SymPy could not decide (often an asymptotic step,
+        an undefined macro, or a definition rather than an identity). The AI notes are hypotheses to guide you, never correctness rulings.
+      </p>
+    </div>
+  );
+}
+
 function ContextUsed({ ctx }: { ctx: ContextBundleSummary }) {
   const [open, setOpen] = useState(false);
   return (
@@ -144,6 +221,7 @@ function ContextUsed({ ctx }: { ctx: ContextBundleSummary }) {
 
 export function CoderivePanel() {
   const running = useCoderiveStore((s) => s.running);
+  const progress = useCoderiveStore((s) => s.progress);
   const rounds = useCoderiveStore((s) => s.rounds);
   const response = useCoderiveStore((s) => s.response);
   const error = useCoderiveStore((s) => s.error);
@@ -155,6 +233,7 @@ export function CoderivePanel() {
         <span className="font-semibold text-zinc-500 dark:text-zinc-400">Co-derive</span>
         <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[11px] font-medium text-zinc-500 dark:bg-zinc-800 dark:text-zinc-300">{intent}</span>
         {running && <Loader2 className="h-3 w-3 animate-spin text-zinc-400" />}
+        {running && progress && <span className="text-[11px] text-zinc-400" data-testid="coderive-progress">{progress}</span>}
       </div>
 
       <div className="flex-1 overflow-auto">
@@ -163,7 +242,10 @@ export function CoderivePanel() {
           <p className="px-3 py-3 text-xs text-zinc-400">No candidates yet.</p>
         )}
 
-        {(running || (response && response.rounds.length > 1)) && rounds.length > 0 && (
+        {/* Whole-document verification renders its own findings view. */}
+        {response?.documentVerification && <DocumentVerificationView dv={response.documentVerification} />}
+
+        {!response?.documentVerification && (running || (response && response.rounds.length > 1)) && rounds.length > 0 && (
           <ol className="border-b border-zinc-100 px-3 py-1.5 text-[11px] text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
             {rounds.map((r) => {
               const v = (s: string) => r.verdicts.filter((x) => x.status === s).length;
@@ -178,7 +260,7 @@ export function CoderivePanel() {
           </ol>
         )}
 
-        {response && (
+        {response && !response.documentVerification && (
           <>
             <ul className="py-2">
               {response.candidates.map((c, i) => (

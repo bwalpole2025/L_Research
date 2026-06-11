@@ -122,3 +122,28 @@ def extract_pdf_endpoint(req: ExtractRequest) -> dict[str, Any]:
         return extract_text(req.pdf_base64)
     except Exception as exc:  # noqa: BLE001
         return {"error": f"extraction failed: {exc}", "text": "", "pageCount": 0}
+
+
+# ── /embed — local sentence embeddings for the RAG document check ─────────────
+
+
+class EmbedRequest(BaseModel):
+    texts: list[str]
+
+
+@app.post("/embed")
+def embed_endpoint(req: EmbedRequest) -> dict[str, Any]:
+    from .embeddings import EMBED_DIM, EMBED_MODEL, embed_texts
+
+    try:
+        vectors = embed_texts(req.texts)
+        return {"vectors": vectors, "model": EMBED_MODEL, "dim": EMBED_DIM}
+    except Exception as exc:  # noqa: BLE001 - never crash the service if torch/model is missing
+        return {"error": f"embedding failed: {exc}", "vectors": [], "model": EMBED_MODEL, "dim": EMBED_DIM}
+
+
+@app.get("/embed/health")
+def embed_health() -> dict[str, Any]:
+    from .embeddings import EMBED_DIM, EMBED_MODEL, embedding_available
+
+    return {"available": embedding_available(), "model": EMBED_MODEL, "dim": EMBED_DIM}

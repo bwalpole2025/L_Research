@@ -63,6 +63,9 @@ function intentInstruction(b: ContextBundle): string {
         `Intent: JUSTIFY. An existing transition goes from $${a.from ?? '?'}$ to $${a.to ?? '?'}$.\n` +
         'Do NOT propose new mathematics. Set "latex" to the existing target expression, set "claimedEqualTo" to the from-expression, and set "technique" to the named algebraic manipulation that connects them. Return a single element.'
       );
+    case 'verify-document':
+      // Whole-document verification is handled before assembleBundle — it never proposes.
+      return '';
   }
 }
 
