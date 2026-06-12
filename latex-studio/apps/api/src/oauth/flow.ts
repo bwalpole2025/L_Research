@@ -61,6 +61,9 @@ interface Pending {
   state: string;
   scopes: string[];
   createdAt: number;
+  /** The web origin the user started from, to return them to the SAME origin
+   *  after the callback (avoids the localhost vs 127.0.0.1 session mismatch). */
+  webOrigin?: string;
 }
 
 const PENDING_TTL_MS = 10 * 60 * 1000; // an auth attempt must complete within 10 min
@@ -79,6 +82,7 @@ export function beginAuthorization(
   cfg: OAuthClientConfig,
   scopes: string[],
   now: number,
+  webOrigin?: string,
 ): { authUrl: string; state: string } {
   if (!cfg.clientId || !cfg.clientSecret) {
     throw new OAuthError('config', `Connector "${connectorId}" has no OAuth client credentials configured.`);
@@ -86,7 +90,7 @@ export function beginAuthorization(
   sweep(now);
   const verifier = createVerifier();
   const state = randomState();
-  pending.set(state, { connectorId, verifier, state, scopes, createdAt: now });
+  pending.set(state, { connectorId, verifier, state, scopes, createdAt: now, ...(webOrigin ? { webOrigin } : {}) });
 
   const params = new URLSearchParams({
     response_type: 'code',

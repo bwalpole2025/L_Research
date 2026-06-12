@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { ConnectorConnectResult, ConnectorStatus } from '@latex-studio/shared';
 import { connectorStatus, listConnectors } from '../connectors/registry.js';
-import { getManifest, oauthConfigFor } from '../connectors/manifest.js';
+import { getManifest, oauthAppKey, oauthRedirectUri, resolveOAuthConfig } from '../connectors/manifest.js';
 import { literatureSource, LiteratureSourceError } from '../literature/sources/index.js';
 import { storageConnector, StorageConnectorError } from '../storage/sources/index.js';
 import {
@@ -25,6 +25,7 @@ import {
  */
 
 const apiKeyBody = z.object({ apiKey: z.string().min(1) });
+const oauthAppBody = z.object({ clientId: z.string().trim().min(1), clientSecret: z.string().trim().min(1) });
 
 export async function connectorRoutes(app: FastifyInstance): Promise<void> {
   // List all connectors with live status.
@@ -85,17 +86,21 @@ export async function connectorRoutes(app: FastifyInstance): Promise<void> {
     if (!manifest) return reply.callNotFound();
 
     if (manifest.authType === 'oauth2') {
-      const cfg = oauthConfigFor(manifest.id, app.config);
+      const cfg = await resolveOAuthConfig(app, manifest.id);
       if (!cfg) return reply.code(400).send({ error: `No OAuth configuration for "${manifest.id}".` });
+      // Capture where the user is browsing from so the callback returns them to
+      // the SAME origin (localhost vs 127.0.0.1 differ for the session).
+      const origin = safeWebOrigin((request.body as { origin?: string } | undefined)?.origin);
       try {
-        const { authUrl } = beginAuthorization(manifest.id, cfg, manifest.scopes, Date.now());
+        const { authUrl } = beginAuthorization(manifest.id, cfg, manifest.scopes, Date.now(), origin);
         return { authUrl } satisfies ConnectorConnectResult;
       } catch (err) {
         if (err instanceof OAuthError && err.kind === 'config') {
           return reply.code(400).send({
             error:
-              `${manifest.name} has no OAuth client credentials. Register an OAuth app and set ` +
-              `the client id/secret in .env (see docs/decisions.md), then try again.`,
+              `${manifest.name} isn't set up yet. Register an OAuth app${manifest.setupUrl ? ` at ${manifest.setupUrl}` : ''}, ` +
+              `add the redirect URI ${oauthRedirectUri(manifest.id, app.config)}, then save its client id/secret here.`,
+            needsSetup: true,
           });
         }
         throw err;
@@ -118,6 +123,22 @@ export async function connectorRoutes(app: FastifyInstance): Promise<void> {
     return reply.code(400).send({ error: `Connector "${manifest.id}" needs no connection.` });
   });
 
+  // Save an OAuth connector's app credentials (client id/secret) — so the user
+  // can set up Drive/Notion/etc. from the UI instead of editing .env + restart.
+  // Stored encrypted in the vault, separate from the user token. Never returned.
+  app.post<{ Params: { id: string } }>('/connectors/:id/configure', async (request, reply) => {
+    const manifest = getManifest(request.params.id);
+    if (!manifest) return reply.callNotFound();
+    if (manifest.authType !== 'oauth2') return reply.code(400).send({ error: 'Only OAuth connectors take client credentials.' });
+    const parsed = oauthAppBody.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'A client id and client secret are required.' });
+    await app.vault.store(oauthAppKey(manifest.id), {
+      authType: 'apiKey',
+      secret: { clientId: parsed.data.clientId.trim(), clientSecret: parsed.data.clientSecret.trim() },
+    });
+    return statusResult(await connectorStatus(app, manifest.id));
+  });
+
   // OAuth redirect target (PUBLIC — see auth allow-list). Validates `state`,
   // exchanges the code, stores the encrypted token, and bounces back to the web app.
   app.get<{ Params: { id: string }; Querystring: { code?: string; state?: string; error?: string } }>(
@@ -125,17 +146,25 @@ export async function connectorRoutes(app: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const { id } = request.params;
       const { code, state, error } = request.query;
+      // The web base for the bounce-back: overridden per-attempt by the origin we
+      // captured at connect time, so the user returns to localhost (or 127.0.0.1)
+      // — whichever they came from — and keeps their session.
+      let webBase = app.config.webBaseUrl;
+      // Return a tiny page that closes the consent POPUP (and, if this was a
+      // full-page fallback rather than a popup, redirects back to /plugins).
       const back = (qs: string): never => {
-        void reply.redirect(`${app.config.webBaseUrl.replace(/\/+$/, '')}/plugins?${qs}`);
+        const url = `${webBase.replace(/\/+$/, '')}/plugins?${qs}`;
+        void reply.type('text/html').send(connectorCallbackPage(url));
         return undefined as never;
       };
 
       if (error) return back(`connector=${encodeURIComponent(id)}&error=${encodeURIComponent(error)}`);
-      const cfg = oauthConfigFor(id, app.config);
+      const cfg = await resolveOAuthConfig(app, id);
       if (!code || !state || !cfg) return back(`connector=${encodeURIComponent(id)}&error=invalid_callback`);
 
       try {
         const pending = consumePending(state, id, Date.now());
+        if (pending.webOrigin) webBase = pending.webOrigin;
         const token = await exchangeCode(cfg, code, pending.verifier, Date.now());
         await app.vault.store(id, {
           authType: 'oauth2',
@@ -159,9 +188,10 @@ export async function connectorRoutes(app: FastifyInstance): Promise<void> {
 
     if (manifest.authType === 'oauth2') {
       const token = await app.vault.get<TokenSet>(manifest.id);
-      const cfg = oauthConfigFor(manifest.id, app.config);
+      const cfg = await resolveOAuthConfig(app, manifest.id);
       if (token?.accessToken && cfg) await revoke(cfg, token.refreshToken ?? token.accessToken);
     }
+    // Delete the user token; keep the saved app credentials so reconnect is easy.
     await app.vault.delete(manifest.id);
     return statusResult(await connectorStatus(app, manifest.id));
   });
@@ -170,6 +200,43 @@ export async function connectorRoutes(app: FastifyInstance): Promise<void> {
 /** Wrap a possibly-null status into a ConnectorConnectResult (no `undefined` field). */
 function statusResult(status: ConnectorStatus | null): ConnectorConnectResult {
   return status ? { status } : {};
+}
+
+/**
+ * The page the OAuth callback returns. When the consent ran in a popup (the
+ * normal path) `window.close()` shuts it and the studio page's poller notices the
+ * new status. If consent ran as a full-page redirect (popups blocked), the page
+ * can't close itself, so it navigates back to `/plugins`. `returnUrl` is already
+ * a localhost URL (validated at connect time).
+ */
+function connectorCallbackPage(returnUrl: string): string {
+  const safe = returnUrl.replace(/[<>"']/g, '');
+  return `<!doctype html><html><head><meta charset="utf-8"><title>LaTeX Studio</title></head>
+<body style="font-family:system-ui,sans-serif;background:#0a0e18;color:#dbe3ff;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
+<p style="text-align:center;line-height:1.6">Finishing up — you can close this window.<br>
+<a href="${safe}" style="color:#8fa3ff">Return to LaTeX Studio</a></p>
+<script>
+  try { if (window.opener) window.opener.postMessage({ source: 'ls-oauth' }, '*'); } catch (e) {}
+  try { window.close(); } catch (e) {}
+  setTimeout(function () { if (!window.closed) window.location.replace(${JSON.stringify(safe)}); }, 500);
+</script></body></html>`;
+}
+
+/**
+ * Only accept a localhost web origin for the post-callback redirect — this is a
+ * single-user localhost app, so anything else is rejected (no open redirect).
+ */
+function safeWebOrigin(origin: string | undefined): string | undefined {
+  if (!origin) return undefined;
+  try {
+    const u = new URL(origin);
+    if ((u.hostname === 'localhost' || u.hostname === '127.0.0.1') && (u.protocol === 'http:' || u.protocol === 'https:')) {
+      return u.origin;
+    }
+  } catch {
+    /* not a URL */
+  }
+  return undefined;
 }
 
 /**

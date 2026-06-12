@@ -34,13 +34,28 @@ const KIND_ORDER: ConnectorKind[] = ['model', 'storage', 'literature'];
 /** One connector row: status, shown scopes, and the right connect/disconnect action. */
 function ConnectorRow({ c }: { c: ConnectorStatus }) {
   const connect = useConnectorsStore((s) => s.connect);
+  const configure = useConnectorsStore((s) => s.configure);
   const disconnect = useConnectorsStore((s) => s.disconnect);
+  const cancel = useConnectorsStore((s) => s.cancel);
   const busyId = useConnectorsStore((s) => s.busyId);
   const busy = busyId === c.id;
   const [keyInput, setKeyInput] = useState('');
   const [showKey, setShowKey] = useState(false);
+  const [showSetup, setShowSetup] = useState(false);
+  const [clientId, setClientId] = useState('');
+  const [clientSecret, setClientSecret] = useState('');
 
+  const isOauth = c.authType === 'oauth2';
+  const needsSetup = isOauth && !c.configured;
   const dot = c.connected ? 'bg-emerald-500' : c.wired ? 'bg-zinc-300 dark:bg-zinc-600' : 'bg-amber-400';
+
+  // Save the OAuth app credentials, then kick off the consent redirect.
+  const saveAndConnect = async () => {
+    if (await configure(c.id, clientId.trim(), clientSecret.trim())) {
+      setShowSetup(false);
+      await connect(c.id);
+    }
+  };
 
   return (
     <div data-testid={`connector-${c.id}`} className="flex flex-col gap-2 border-b border-zinc-100 py-3.5 last:border-0 dark:border-[#161d31]">
@@ -70,27 +85,39 @@ function ConnectorRow({ c }: { c: ConnectorStatus }) {
         </div>
 
         <div className="flex flex-none items-center gap-2">
-          {c.authType === 'none' ? (
+          {busy ? (
+            // While an action is in flight, the only control is a always-pressable
+            // Cancel — so the button can never wedge on "Connecting…".
+            <>
+              <span className="text-xs text-zinc-400">Connecting…</span>
+              <button
+                type="button"
+                data-testid={`connector-cancel-${c.id}`}
+                onClick={() => cancel()}
+                className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+              >
+                Cancel
+              </button>
+            </>
+          ) : c.authType === 'none' ? (
             <span className="text-xs text-zinc-400">No sign-in needed</span>
           ) : c.authType === 'subscriptionCli' ? (
             <button
               type="button"
-              disabled={busy}
               data-testid={`connector-connect-${c.id}`}
               onClick={() => void connect(c.id)}
-              className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+              className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
             >
-              {busy ? 'Checking…' : 'Recheck'}
+              Recheck
             </button>
           ) : c.connected ? (
             <button
               type="button"
-              disabled={busy}
               data-testid={`connector-disconnect-${c.id}`}
               onClick={() => void disconnect(c.id)}
-              className="rounded-md border border-rose-300 px-3 py-1.5 text-sm text-rose-600 hover:bg-rose-50 disabled:opacity-50 dark:border-rose-500/40 dark:text-rose-300 dark:hover:bg-rose-500/10"
+              className="rounded-md border border-rose-300 px-3 py-1.5 text-sm text-rose-600 hover:bg-rose-50 dark:border-rose-500/40 dark:text-rose-300 dark:hover:bg-rose-500/10"
             >
-              {busy ? 'Disconnecting…' : 'Disconnect'}
+              Disconnect
             </button>
           ) : c.authType === 'apiKey' ? (
             <button
@@ -102,15 +129,25 @@ function ConnectorRow({ c }: { c: ConnectorStatus }) {
             >
               Connect
             </button>
+          ) : needsSetup ? (
+            <button
+              type="button"
+              disabled={!c.wired}
+              data-testid={`connector-setup-${c.id}`}
+              onClick={() => setShowSetup((v) => !v)}
+              className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+            >
+              Set up
+            </button>
           ) : (
             <button
               type="button"
-              disabled={busy || !c.wired}
+              disabled={!c.wired}
               data-testid={`connector-connect-${c.id}`}
               onClick={() => void connect(c.id)}
               className="rounded-md bg-[#4e68f5] px-3 py-1.5 text-sm font-semibold text-white hover:bg-[#5f78f8] disabled:opacity-50"
             >
-              {busy ? 'Connecting…' : 'Connect'}
+              Connect
             </button>
           )}
         </div>
@@ -136,6 +173,61 @@ function ConnectorRow({ c }: { c: ConnectorStatus }) {
           </button>
         </div>
       )}
+
+      {showSetup && needsSetup && (
+        <div data-testid={`connector-setup-form-${c.id}`} className="mt-1 rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-[13px] dark:border-[#243049] dark:bg-[#0d1322]">
+          <p className="text-zinc-600 dark:text-[#aab3c8]">
+            Register an OAuth app{c.setupUrl && (
+              <> at{' '}
+                <a href={c.setupUrl} target="_blank" rel="noreferrer" className="text-[#4e68f5] underline">
+                  {new URL(c.setupUrl).host}
+                </a>
+              </>
+            )}{' '}and add this <strong>redirect URI</strong>:
+          </p>
+          {c.redirectUri && (
+            <div className="mt-1.5 flex items-center gap-2">
+              <code data-testid={`connector-redirect-${c.id}`} className="flex-1 truncate rounded bg-white px-2 py-1 font-mono text-[11px] text-zinc-700 dark:bg-[#0a0e18] dark:text-[#c6cde0]">
+                {c.redirectUri}
+              </code>
+              <button
+                type="button"
+                onClick={() => void navigator.clipboard?.writeText(c.redirectUri ?? '')}
+                className="rounded border border-zinc-300 px-2 py-1 text-[11px] hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+              >
+                Copy
+              </button>
+            </div>
+          )}
+          <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center">
+            <input
+              value={clientId}
+              onChange={(e) => setClientId(e.target.value)}
+              placeholder="Client ID"
+              data-testid={`connector-clientid-${c.id}`}
+              className="w-full rounded-md border border-zinc-300 bg-transparent px-3 py-1.5 font-mono text-xs outline-none focus:border-blue-500 dark:border-zinc-700 sm:w-56"
+            />
+            <input
+              type="password"
+              value={clientSecret}
+              onChange={(e) => setClientSecret(e.target.value)}
+              placeholder="Client secret"
+              data-testid={`connector-clientsecret-${c.id}`}
+              className="w-full rounded-md border border-zinc-300 bg-transparent px-3 py-1.5 font-mono text-xs outline-none focus:border-blue-500 dark:border-zinc-700 sm:w-56"
+            />
+            <button
+              type="button"
+              disabled={!clientId.trim() || !clientSecret.trim() || busy}
+              data-testid={`connector-save-${c.id}`}
+              onClick={() => void saveAndConnect()}
+              className="rounded-md bg-[#4e68f5] px-3 py-1.5 text-sm font-semibold text-white hover:bg-[#5f78f8] disabled:opacity-50"
+            >
+              {busy ? 'Saving…' : 'Save & connect'}
+            </button>
+          </div>
+          <p className="mt-1.5 text-[11px] text-zinc-400">Stored encrypted on this machine — never sent to the browser again.</p>
+        </div>
+      )}
     </div>
   );
 }
@@ -145,9 +237,11 @@ function ConnectorsSection() {
   const loading = useConnectorsStore((s) => s.loading);
   const error = useConnectorsStore((s) => s.error);
   const load = useConnectorsStore((s) => s.load);
+  const cancel = useConnectorsStore((s) => s.cancel);
   const [banner, setBanner] = useState<string | null>(null);
 
   useEffect(() => {
+    cancel(); // clear any stale "Connecting…" left over from a prior attempt
     void load();
     // Surface the OAuth callback result (set by the api redirect back to /plugins).
     const params = new URLSearchParams(window.location.search);
@@ -156,7 +250,17 @@ function ConnectorsSection() {
     if (params.get('connected') || params.get('error')) {
       window.history.replaceState({}, '', '/plugins');
     }
-  }, [load]);
+    // Safari restores the page from back-forward cache without re-running effects;
+    // `pageshow` (persisted) is our signal to clear a frozen busy state + refresh.
+    const onShow = (e: PageTransitionEvent) => {
+      if (e.persisted) {
+        cancel();
+        void load();
+      }
+    };
+    window.addEventListener('pageshow', onShow);
+    return () => window.removeEventListener('pageshow', onShow);
+  }, [load, cancel]);
 
   const byKind = useMemo(() => {
     const groups = new Map<ConnectorKind, ConnectorStatus[]>();

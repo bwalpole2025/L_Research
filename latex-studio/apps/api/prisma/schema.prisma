@@ -57,6 +57,12 @@ model Project {
   // Prose-check per-project custom dictionary (domain terms, names).
   customWords String[] @default([])
 
+  // Python "Run" settings. pythonRunTarget is the default entry .py to run
+  // (empty ⇒ run the active file). networkEnabled opts this project's sandbox
+  // into network access (off by default; see ADR-013).
+  pythonRunTarget String  @default("")
+  networkEnabled  Boolean @default(false)
+
   files       TexFile[]
   compileLogs CompileLog[]
   snapshots   Snapshot[]

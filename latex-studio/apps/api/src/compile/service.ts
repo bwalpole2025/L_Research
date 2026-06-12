@@ -94,11 +94,23 @@ export class CompileService {
 
       const durationMs = Date.now() - start;
       const rev = Date.now();
+      // RED IS RESERVED FOR "NO PDF CAME OUT". latexmk in nonstop mode often
+      // exits non-zero yet still emits a usable PDF (e.g. an undefined control
+      // sequence, or a labels-changed rerun) — that run COMPILED, so its `!`
+      // entries are demoted to ORANGE (wrong-looking output, not a failure).
+      // Freshness (mtime >= run start) guards against a stale PDF from an
+      // earlier run masking a genuinely failed one.
+      const pdfFresh = await this.artifactFresh(input.projectId, `${base}.pdf`, start);
       const status: CompileResponse['status'] = result.timedOut
         ? 'timeout'
-        : result.code === 0
+        : result.code === 0 || pdfFresh
           ? 'success'
           : 'error';
+      if (status === 'success') {
+        for (const d of diagnostics) {
+          if (d.severity === 'error') d.severity = 'warning-important';
+        }
+      }
 
       const res: CompileResponse = { status, diagnostics, durationMs, log: tail(logText, 20_000) };
       if (await this.artifactExists(input.projectId, `${base}.pdf`)) {
@@ -181,6 +193,16 @@ export class CompileService {
   private async artifactExists(projectId: string, rel: string): Promise<boolean> {
     try {
       return (await stat(this.runner.artifactPath(projectId, rel))).isFile();
+    } catch {
+      return false;
+    }
+  }
+
+  /** The artifact exists AND was (re)written by the current run. */
+  private async artifactFresh(projectId: string, rel: string, sinceMs: number): Promise<boolean> {
+    try {
+      const st = await stat(this.runner.artifactPath(projectId, rel));
+      return st.isFile() && st.mtimeMs >= sinceMs;
     } catch {
       return false;
     }

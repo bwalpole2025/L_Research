@@ -21,10 +21,13 @@ import {
   Sigma,
   Sparkles,
   SpellCheck,
+  Square,
   Sun,
+  Terminal,
 } from 'lucide-react';
 import { computeOverallStatus, useEditorStore } from '@/lib/store';
 import { useAiStore } from '@/lib/aiStore';
+import { useRunStore } from '@/lib/runStore';
 import { useThesisStore } from '@/lib/thesisStore';
 import { useCoderiveStore } from '@/lib/coderiveStore';
 import { useReviewStore } from '@/lib/reviewStore';
@@ -68,8 +71,16 @@ export function Toolbar({ onOpenSnapshots, onOpenSettings, onCheckMath }: Toolba
   const openCoderive = useCoderiveStore((s) => s.openDialog);
   const runReview = useReviewStore((s) => s.runReview);
   const setBottomTab = useThesisStore((s) => s.setBottomTab);
+  const activeFileId = useEditorStore((s) => s.activeFileId);
+  const files = useEditorStore((s) => s.files);
+  const running = useRunStore((s) => s.running);
+  const runActive = useRunStore((s) => s.runActive);
+  const stopRun = useRunStore((s) => s.stop);
+  const runAndCompile = useRunStore((s) => s.runAndCompile);
+  const openRunPicker = useRunStore((s) => s.openPicker);
 
   const [toolsOpen, setToolsOpen] = useState(false);
+  const [runMenuOpen, setRunMenuOpen] = useState(false);
   const toolsRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -83,6 +94,8 @@ export function Toolbar({ onOpenSnapshots, onOpenSettings, onCheckMath }: Toolba
 
   const overall = computeOverallStatus(status, openFileIds);
   const project = projects.find((p) => p.id === projectId);
+  const activePath = files.find((f) => f.id === activeFileId)?.path;
+  const canRun = (!!activePath && activePath.toLowerCase().endsWith('.py')) || !!project?.pythonRunTarget;
   const session = loadSession();
   const initials = (session?.name ?? 'LS')
     .split(/\s+/)
@@ -235,9 +248,59 @@ export function Toolbar({ onOpenSnapshots, onOpenSettings, onCheckMath }: Toolba
           <Share2 className="h-[15px] w-[15px]" /> Share
         </button>
 
+        {/* Run Python (separate from Compile) — flips to Stop while running. */}
+        <div className="relative flex items-center">
+          {running ? (
+            <button
+              type="button"
+              data-testid="run-stop"
+              title="Stop the running script"
+              onClick={() => void stopRun()}
+              className="flex h-9 items-center gap-2 rounded-[9px] bg-rose-500 px-4 text-[13.5px] font-semibold text-white shadow-[0_4px_14px_rgba(244,63,94,0.25)] transition-colors hover:bg-rose-600"
+            >
+              <Square className="h-3.5 w-3.5" /> Stop
+            </button>
+          ) : (
+            <div className="flex">
+              <button
+                type="button"
+                data-testid="run-python"
+                title="Run Python (⌘R)"
+                disabled={!canRun}
+                onClick={runActive}
+                className="flex h-9 items-center gap-2 rounded-l-[9px] bg-emerald-500 px-3.5 text-[13.5px] font-semibold text-white shadow-[0_4px_14px_rgba(16,185,129,0.25)] transition-colors hover:bg-emerald-600 disabled:pointer-events-none disabled:opacity-50"
+              >
+                <Terminal className="h-3.5 w-3.5" /> Run
+              </button>
+              <button
+                type="button"
+                aria-label="Run options"
+                onClick={() => setRunMenuOpen((v) => !v)}
+                className="flex h-9 items-center rounded-r-[9px] border-l border-emerald-600/60 bg-emerald-500 px-1.5 text-white transition-colors hover:bg-emerald-600"
+              >
+                <ChevronDown className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
+          {runMenuOpen && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setRunMenuOpen(false)} />
+              <div className="absolute right-0 top-11 z-50 w-56 rounded-xl border border-zinc-200 bg-white p-1.5 shadow-xl dark:border-[#1f2840] dark:bg-[#0d1322]">
+                <button type="button" data-testid="run-picker" onClick={() => { setRunMenuOpen(false); openRunPicker(); }} className={menuItem}>
+                  <Terminal className="h-4 w-4" /> Run Python file…
+                </button>
+                <button type="button" data-testid="run-and-compile" onClick={() => { setRunMenuOpen(false); void runAndCompile(); }} className={menuItem}>
+                  <Play className="h-4 w-4" /> Run &amp; Compile
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+
         <button
           type="button"
           title="Compile (⌘↵)"
+          data-tour="compile"
           onClick={() => void compileProject()}
           disabled={compiling}
           className="flex h-9 items-center gap-2 rounded-[9px] bg-[#4e68f5] px-4 text-[13.5px] font-semibold text-white shadow-[0_4px_14px_rgba(78,104,245,0.30)] transition-colors hover:bg-[#5f78f8] disabled:pointer-events-none disabled:opacity-60"

@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { ConnectorManifest, ConnectorStatus } from '@latex-studio/shared';
 import { cliStatus } from '../providers/cli/detect.js';
-import { CONNECTORS, getManifest } from './manifest.js';
+import { CONNECTORS, getManifest, oauthConfigured, oauthRedirectUri } from './manifest.js';
 
 /**
  * Project the static manifests onto live connection state:
@@ -14,17 +14,18 @@ import { CONNECTORS, getManifest } from './manifest.js';
 export async function listConnectors(app: FastifyInstance): Promise<ConnectorStatus[]> {
   const metas = await app.vault.listMeta();
   const metaById = new Map(metas.map((m) => [m.connectorId, m]));
-  return Promise.all(CONNECTORS.map((m) => statusFor(m, metaById.get(m.id))));
+  return Promise.all(CONNECTORS.map((m) => statusFor(app, m, metaById.get(m.id))));
 }
 
 export async function connectorStatus(app: FastifyInstance, id: string): Promise<ConnectorStatus | null> {
   const manifest = getManifest(id);
   if (!manifest) return null;
   const meta = await app.vault.meta(id);
-  return statusFor(manifest, meta ?? undefined);
+  return statusFor(app, manifest, meta ?? undefined);
 }
 
 async function statusFor(
+  app: FastifyInstance,
   m: ConnectorManifest,
   meta?: { accountLabel: string | null; scopes: string[]; lastUsedAt: Date | null },
 ): Promise<ConnectorStatus> {
@@ -55,7 +56,31 @@ async function statusFor(
     };
   }
 
-  if (m.authType === 'oauth2' || m.authType === 'apiKey') {
+  if (m.authType === 'oauth2') {
+    // Whether USABLE client id/secret are available (env, or decryptable in the
+    // vault) — the UI gates "Connect" behind this so a missing setup is a form,
+    // not an error. Uses resolveOAuthConfig so an undecryptable row reads as
+    // not-configured rather than a misleading "configured".
+    const configured = await oauthConfigured(app, m.id);
+    const oauthExtras = {
+      configured,
+      redirectUri: oauthRedirectUri(m.id, app.config),
+      ...(m.setupUrl ? { setupUrl: m.setupUrl } : {}),
+    };
+    if (!meta) {
+      return { ...base, ...oauthExtras, detail: configured ? 'Not connected.' : 'Add your OAuth app credentials to connect.' };
+    }
+    return {
+      ...base,
+      connected: true,
+      scopesGranted: meta.scopes.length > 0 ? meta.scopes : m.scopes,
+      ...oauthExtras,
+      ...(meta.accountLabel ? { accountLabel: meta.accountLabel } : {}),
+      ...(meta.lastUsedAt ? { lastUsedAt: meta.lastUsedAt.toISOString() } : {}),
+    };
+  }
+
+  if (m.authType === 'apiKey') {
     if (!meta) return { ...base, detail: m.wired ? 'Not connected.' : 'Adapter lands in a later milestone.' };
     return {
       ...base,

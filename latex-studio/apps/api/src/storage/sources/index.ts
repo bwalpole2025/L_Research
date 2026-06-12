@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import type { StorageConnector } from '@latex-studio/shared';
-import { oauthConfigFor } from '../../connectors/manifest.js';
+import { resolveOAuthConfig } from '../../connectors/manifest.js';
 import { OAuthError, withFreshToken } from '../../oauth/flow.js';
 import { GoogleDriveConnector } from './googleDrive.js';
 import { DropboxConnector } from './dropbox.js';
@@ -23,7 +23,7 @@ export class StorageConnectorError extends Error {
  * vault — so the access token is fetched fresh per call and never leaves the api.
  */
 export async function storageConnector(app: FastifyInstance, id: string): Promise<StorageConnector> {
-  const cfg = oauthConfigFor(id, app.config);
+  const cfg = await resolveOAuthConfig(app, id);
   if (!cfg) throw new StorageConnectorError('unknown', `Unknown storage connector "${id}".`);
   if (!(await app.vault.has(id))) throw new StorageConnectorError('needs_connect', `${id} is not connected.`);
 

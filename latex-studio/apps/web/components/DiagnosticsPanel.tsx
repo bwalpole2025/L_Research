@@ -54,6 +54,7 @@ export function DiagnosticsPanel() {
   const compileDurationMs = useEditorStore((s) => s.compileDurationMs);
   const compileError = useEditorStore((s) => s.compileError);
   const compileLog = useEditorStore((s) => s.compileLog);
+  const pdfUrl = useEditorStore((s) => s.pdfUrl);
   const projects = useEditorStore((s) => s.projects);
   const projectId = useEditorStore((s) => s.projectId);
   const revealLocation = useEditorStore((s) => s.revealLocation);
@@ -99,7 +100,7 @@ export function DiagnosticsPanel() {
         ? `Compiled with ${(counts['warning-important'] ?? 0) + (counts['warning-minor'] ?? 0)} warning${(counts['warning-important'] ?? 0) + (counts['warning-minor'] ?? 0) === 1 ? '' : 's'}`
         : 'Compiled cleanly'
       : compileStatus
-        ? `Failed — ${counts.error ?? 0} error${(counts.error ?? 0) === 1 ? '' : 's'}`
+        ? `Failed — ${counts.error ?? 0} error${(counts.error ?? 0) === 1 ? '' : 's'}${pdfUrl ? ' · PDF shown is the last successful build' : ''}`
         : 'Compile to see diagnostics.';
 
   const toggleExpand = (i: number) =>

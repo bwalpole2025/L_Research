@@ -111,3 +111,23 @@ export function saveTheme(theme: Theme): void {
     /* ignore */
   }
 }
+
+// ─── Product tour (onboarding) ───────────────────────────────────────────────
+const TOUR_PREFIX = 'latex-studio:tour:';
+
+/** Whether a one-time tour with this id has already been seen/dismissed. SSR-safe
+ *  (returns true on the server so a tour never renders during SSR). */
+export function loadTourSeen(id: string): boolean {
+  if (!hasWindow()) return true;
+  return window.localStorage.getItem(TOUR_PREFIX + id) === 'seen';
+}
+
+/** Mark a one-time tour as seen so it never auto-shows again. */
+export function saveTourSeen(id: string): void {
+  if (!hasWindow()) return;
+  try {
+    window.localStorage.setItem(TOUR_PREFIX + id, 'seen');
+  } catch {
+    /* ignore */
+  }
+}

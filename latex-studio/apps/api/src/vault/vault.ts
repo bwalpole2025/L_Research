@@ -61,12 +61,22 @@ export class Vault {
     return toMeta(row);
   }
 
-  /** Decrypt + return the secret (SERVER-SIDE ONLY). null when absent. */
+  /**
+   * Decrypt + return the secret (SERVER-SIDE ONLY). null when absent OR when the
+   * stored ciphertext can't be decrypted with the current master key (a key
+   * change/rotation, or a corrupted row). Returning null rather than throwing
+   * keeps the connector usable: it simply reads as "not connected", prompting a
+   * reconnect, instead of 500-ing every route.
+   */
   async get<T = unknown>(connectorId: string): Promise<T | null> {
     const { key } = await resolveMasterKey(this.config);
     const row = await this.prisma.credential.findUnique({ where: { connectorId } });
     if (!row) return null;
-    return JSON.parse(decryptSecret(key, { iv: row.iv, tag: row.tag, ciphertext: row.ciphertext })) as T;
+    try {
+      return JSON.parse(decryptSecret(key, { iv: row.iv, tag: row.tag, ciphertext: row.ciphertext })) as T;
+    } catch {
+      return null; // undecryptable (master key changed) → treat as absent
+    }
   }
 
   /** The non-secret metadata for status display (no ciphertext, no plaintext). */

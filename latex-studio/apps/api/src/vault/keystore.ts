@@ -1,22 +1,30 @@
 import { randomBytes } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
 import type { AppConfig } from '../config.js';
 
 /**
- * Resolves the vault MASTER KEY. Policy (see docs/decisions.md):
- *   1. OS keychain (preferred) — via the optional `keytar` native module. The
- *      key is generated once and persisted in the login keychain.
- *   2. `CONNECTORS_MASTER_KEY` env var — the fallback for Docker / headless / CI,
- *      where the keychain is unavailable, and for deterministic tests.
- * If neither is available we throw (fail closed) rather than store secrets in
- * the clear.
+ * Resolves the vault MASTER KEY. Order (see docs/decisions.md):
+ *   1. `CONNECTORS_MASTER_KEY` env var — explicit override for Docker / CI / a
+ *      deterministic deployment, and for tests.
+ *   2. A persisted key FILE (`~/.latex-studio/connectors-master-key`, mode 0600).
+ *      This is the reliable, headless-safe default: read with plain `fs`, it has
+ *      none of the OS-keychain's interactive-prompt fragility in a background dev
+ *      server (which made it intermittently unavailable and 500 the routes).
+ *   3. First run only: seed the file from the OS keychain when it's available
+ *      (so an existing keychain key is honoured), else generate a fresh key. The
+ *      key is then written to the file so EVERY later resolve is deterministic
+ *      and prompt-free.
  *
- * keytar is an OPTIONAL dependency: a failed native build (common in containers)
- * must never block boot, so it is imported dynamically and absence falls through
- * to the env key.
+ * The key never leaves the server and is never logged. keytar stays an OPTIONAL
+ * dependency — when present it's used to seed/back up the key, but the file makes
+ * the vault work even when it isn't.
  */
 
 const KEYCHAIN_SERVICE = 'latex-studio';
 const KEYCHAIN_ACCOUNT = 'connectors-master-key';
+const KEY_FILE = join(homedir(), '.latex-studio', 'connectors-master-key');
 
 type Keytar = {
   getPassword(service: string, account: string): Promise<string | null>;
@@ -42,43 +50,80 @@ async function loadKeytar(): Promise<Keytar | null> {
 }
 
 /** Where the resolved master key came from (for status/diagnostics only). */
-export type MasterKeySource = 'env' | 'keychain';
+export type MasterKeySource = 'env' | 'keychain' | 'file';
 
 let cached: { key: string; source: MasterKeySource } | null = null;
 
+function readKeyFile(): string | null {
+  try {
+    if (existsSync(KEY_FILE)) return readFileSync(KEY_FILE, 'utf8').trim() || null;
+  } catch {
+    /* unreadable — fall through */
+  }
+  return null;
+}
+
+function writeKeyFile(key: string): void {
+  try {
+    mkdirSync(dirname(KEY_FILE), { recursive: true, mode: 0o700 });
+    writeFileSync(KEY_FILE, key, { mode: 0o600 });
+  } catch {
+    /* best-effort; if it fails we still return the in-memory key this run */
+  }
+}
+
 /**
- * Return the master key (and its source), memoised for the process. Preference:
- * env (explicit override / test / container) → keychain (generate + persist).
+ * Return the master key (and its source), memoised for the process. Always
+ * succeeds (it will generate + persist a key if needed), so the vault is never
+ * unavailable on a localhost run.
  */
 export async function resolveMasterKey(config: AppConfig): Promise<{ key: string; source: MasterKeySource }> {
   if (cached) return cached;
 
-  // Explicit env key wins — it's the deliberate Docker/CI/test override.
+  // 1. Explicit env key (deliberate override — Docker / CI / test).
   const fromEnv = config.connectorsMasterKey.trim();
   if (fromEnv) {
     cached = { key: fromEnv, source: 'env' };
     return cached;
   }
 
-  const keytar = await loadKeytar();
-  if (keytar) {
-    let key = await keytar.getPassword(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT);
-    if (!key) {
-      key = randomBytes(32).toString('base64');
-      await keytar.setPassword(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT, key);
-    }
-    cached = { key, source: 'keychain' };
+  // 2. Persisted file — the stable, prompt-free default.
+  const fromFile = readKeyFile();
+  if (fromFile) {
+    cached = { key: fromFile, source: 'file' };
     return cached;
   }
 
-  throw new Error(
-    'No vault master key available: the OS keychain (keytar) is unavailable and ' +
-      'CONNECTORS_MASTER_KEY is unset. Set CONNECTORS_MASTER_KEY (e.g. `openssl rand -base64 32`) ' +
-      'to enable connector credential storage.',
-  );
+  // 3a. First run: honour an existing keychain key if we can read one.
+  const keytar = await loadKeytar();
+  if (keytar) {
+    try {
+      const existing = await keytar.getPassword(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT);
+      if (existing) {
+        writeKeyFile(existing); // stabilise: future resolves read the file, not the keychain
+        cached = { key: existing, source: 'keychain' };
+        return cached;
+      }
+    } catch {
+      /* keychain unavailable in this (headless) process — fall through to a file key */
+    }
+  }
+
+  // 3b. Generate, persist to the file (+ best-effort keychain backup), use.
+  const key = randomBytes(32).toString('base64');
+  writeKeyFile(key);
+  if (keytar) {
+    try {
+      await keytar.setPassword(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT, key);
+    } catch {
+      /* best-effort */
+    }
+  }
+  cached = { key, source: 'file' };
+  return cached;
 }
 
-/** True when a master key can be resolved (keychain present or env set). */
+/** True when a master key can be resolved — now always true on a real run. */
 export async function masterKeyAvailable(config: AppConfig): Promise<boolean> {
   try {
     await resolveMasterKey(config);

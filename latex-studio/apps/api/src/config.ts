@@ -31,6 +31,33 @@ export interface AppConfig {
   texliveContainer: string;
   /** Hard compile timeout in milliseconds. */
   compileTimeoutMs: number;
+
+  // ─── Python "Run" sandbox (pyrun) ──────────────────────────────────────────
+  /**
+   * How a project's Python is executed. `docker` (default) runs each script in a
+   * fresh throwaway `docker run --rm` container from the `pyrunImage` — non-root,
+   * resource/time-limited, network off by default. `local` spawns host `python3`
+   * directly: a DEV/TEST-ONLY fallback that is NOT sandboxed (see ADR-013).
+   */
+  pyrunMode: TexliveMode;
+  /** Image used for `docker run` Python executions (built by the pyrun service). */
+  pyrunImage: string;
+  /**
+   * HOST path of the compile workspace, used as the `docker run -v` source so the
+   * sandbox can read the project's files. Equals `compileWorkspace` in the normal
+   * host-api dev setup; override when the api itself runs in a container.
+   */
+  pyrunWorkspaceHost: string;
+  /** Hard wall-clock timeout for a run, in milliseconds (SIGKILL on expiry). */
+  pyrunTimeoutMs: number;
+  /** CPU cap passed to `docker run --cpus`. */
+  pyrunCpus: string;
+  /** Memory cap passed to `docker run --memory`. */
+  pyrunMemory: string;
+  /** Process cap passed to `docker run --pids-limit`. */
+  pyrunPids: number;
+  /** Non-root user the sandbox runs as (`docker run --user`). */
+  pyrunUser: string;
   /**
    * Which ModelProvider backs the AI features. `agent-sdk` uses the Claude
    * Agent SDK over your `claude login` subscription (no API key). `api` selects
@@ -99,6 +126,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     texliveWorkspace: env.TEXLIVE_WORKSPACE ?? '/workspace',
     texliveContainer: env.TEXLIVE_CONTAINER ?? 'latex-studio-texlive',
     compileTimeoutMs: Number.parseInt(env.COMPILE_TIMEOUT_MS ?? '120000', 10),
+    pyrunMode: env.PYRUN_MODE === 'local' ? 'local' : 'docker',
+    pyrunImage: env.PYRUN_IMAGE ?? 'latex-studio-pyrun',
+    pyrunWorkspaceHost: env.PYRUN_WORKSPACE_HOST ?? env.COMPILE_WORKSPACE ?? resolve(REPO_ROOT, '.compile-workspace'),
+    pyrunTimeoutMs: Number.parseInt(env.PYRUN_TIMEOUT_MS ?? '60000', 10),
+    pyrunCpus: env.PYRUN_CPUS ?? '1',
+    pyrunMemory: env.PYRUN_MEMORY ?? '512m',
+    pyrunPids: Number.parseInt(env.PYRUN_PIDS_LIMIT ?? '256', 10),
+    pyrunUser: env.PYRUN_USER ?? '1000:1000',
     modelProvider: env.MODEL_PROVIDER === 'api' ? 'api' : 'agent-sdk',
     model: env.MODEL ?? DEFAULT_MODEL,
     completionsProvider: env.COMPLETIONS_PROVIDER === 'api' ? 'api' : 'agent-sdk',

@@ -27,6 +27,7 @@ import { editorController } from '@/lib/editorController';
 import { CompletionController } from '@/lib/completion/controller';
 import { useDocumentModelStore } from '@/lib/documentModelStore';
 import { latexLanguageSupport, beginEndCloser } from './latex';
+import { pythonLanguageSupport } from './python';
 import { latexAutocomplete } from './latexAutocomplete';
 import { mathPreview } from './mathPreview';
 import { editorTheme } from './theme';
@@ -39,6 +40,8 @@ import { predictBlockExtension } from './predictBlock';
 
 export interface CodeEditorProps {
   fileId: string | null;
+  /** Project-relative path of the active file (selects the editor language). */
+  filePath: string | null;
   /** Content of the active file, or undefined while it is still loading. */
   content: string | undefined;
   theme: Theme;
@@ -47,6 +50,8 @@ export interface CodeEditorProps {
   onCursor: (id: string, cursor: CursorState) => void;
   onRequestSnapshot: () => void;
   onCompile: () => void;
+  /** Cmd+R → run the active Python file in the sandbox. */
+  onRunPython: () => void;
   /** Cmd+K on the current selection → open the inline-edit prompt. */
   onInlineEdit: () => void;
   /** A queued request to scroll to + flash a line in the active file. */
@@ -93,6 +98,9 @@ export function CodeEditor(props: CodeEditorProps) {
 
   function buildState(content: string, cursor: CursorState | undefined): EditorState {
     const max = content.length;
+    // Python files get plain syntax highlighting; LaTeX gets the full toolset
+    // (autocomplete, math preview, AI ghost-text, \begin closer).
+    const isPython = (cb.current.filePath ?? '').toLowerCase().endsWith('.py');
 
     const extensions: Extension[] = [
       lineNumbers(),
@@ -110,15 +118,19 @@ export function CodeEditor(props: CodeEditorProps) {
       highlightActiveLine(),
       highlightSelectionMatches(),
       search({ top: true }),
-      latexLanguageSupport(),
-      latexAutocomplete(),
-      mathPreview(),
-      beginEndCloser,
+      isPython ? pythonLanguageSupport() : latexLanguageSupport(),
+      ...(isPython
+        ? []
+        : [
+            latexAutocomplete(),
+            mathPreview(),
+            beginEndCloser,
+            inlineSuggestion(completion.current!.config),
+            predictBlockExtension(completion.current!.predictConfig),
+          ]),
       flashField,
       mathGutter(),
       diagnosticsLint(),
-      inlineSuggestion(completion.current!.config),
-      predictBlockExtension(completion.current!.predictConfig),
       EditorView.lineWrapping,
       keymap.of([
         {
@@ -142,6 +154,14 @@ export function CodeEditor(props: CodeEditorProps) {
           preventDefault: true,
           run: () => {
             cb.current.onCompile();
+            return true;
+          },
+        },
+        {
+          key: 'Mod-r',
+          preventDefault: true,
+          run: () => {
+            cb.current.onRunPython();
             return true;
           },
         },

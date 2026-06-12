@@ -42,6 +42,9 @@ import type {
   Project,
   ProjectFolder,
   ProjectFoldersResponse,
+  PyFigureLink,
+  RunDone,
+  RunStarted,
   ProseCheckReport,
   ProseRuleToggles,
   ReplacementResponse,
@@ -142,10 +145,18 @@ export const api = {
       model?: string;
       aiInstructions?: string;
       folderId?: string | null;
+      pythonRunTarget?: string;
+      networkEnabled?: boolean;
     },
   ) => request<Project>('PATCH', `/projects/${id}`, patch),
   /** Move a project into a Home folder (null = root). Purely organisational. */
   moveProject: (id: string, folderId: string | null) => request<Project>('PATCH', `/projects/${id}`, { folderId }),
+
+  // Python "Run" (sandboxed execution; streaming lives in streamRun below).
+  stopRun: (projectId: string) => request<{ stopped: boolean }>('POST', `/projects/${projectId}/run/stop`, {}),
+  getPyFigures: (projectId: string) => request<{ links: PyFigureLink[] }>('GET', `/projects/${projectId}/pyfigures`),
+  /** Same-origin proxied URL for a run artefact (server returns the inner path). */
+  runArtifactUrl: (serverUrl: string) => `/api${serverUrl}`,
 
   // App-level project folders (Home explorer).
   listProjectFolders: () => request<ProjectFoldersResponse>('GET', '/project-folders'),
@@ -288,8 +299,10 @@ export const api = {
   // ── Connectors (model / storage / literature) ──────────────────────────────
   listConnectors: () => request<{ connectors: ConnectorStatus[] }>('GET', '/connectors'),
   getConnector: (id: string) => request<ConnectorStatus>('GET', `/connectors/${id}`),
-  connectConnector: (id: string, body?: { apiKey?: string }) =>
+  connectConnector: (id: string, body?: { apiKey?: string; origin?: string }) =>
     request<ConnectorConnectResult>('POST', `/connectors/${id}/connect`, body ?? {}),
+  configureConnector: (id: string, clientId: string, clientSecret: string) =>
+    request<ConnectorConnectResult>('POST', `/connectors/${id}/configure`, { clientId, clientSecret }),
   disconnectConnector: (id: string) => request<ConnectorConnectResult>('POST', `/connectors/${id}/disconnect`),
 };
 
@@ -433,6 +446,79 @@ export async function streamCoderive(
         const e = data as { kind: AiErrorKind; message: string };
         handlers.onError(e.kind, e.message);
       }
+    }
+  }
+}
+
+/**
+ * Execute a project's Python and stream its stdout/stderr over SSE. Mirrors
+ * streamCoderive's reader. Cancel by aborting `signal` (and call api.stopRun to
+ * kill the sandbox). Resolves when the run ends.
+ */
+export async function streamRun(
+  projectId: string,
+  body: { fileId?: string; path?: string; args?: string[] },
+  handlers: {
+    onStart: (s: RunStarted) => void;
+    onStdout: (chunk: string) => void;
+    onStderr: (chunk: string) => void;
+    onDone: (d: RunDone) => void;
+    onError: (message: string) => void;
+  },
+  signal?: AbortSignal,
+): Promise<void> {
+  const init: RequestInit = { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) };
+  if (signal) init.signal = signal;
+
+  let res: Response;
+  try {
+    res = await fetch(`/api/projects/${projectId}/run`, init);
+  } catch {
+    handlers.onError('Could not reach the run service.');
+    return;
+  }
+  if (!res.ok || !res.body) {
+    let message = res.statusText;
+    try {
+      const data = (await res.json()) as { error?: string };
+      if (data.error) message = data.error;
+    } catch {
+      /* non-JSON */
+    }
+    handlers.onError(message);
+    return;
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  for (;;) {
+    let chunk;
+    try {
+      chunk = await reader.read();
+    } catch {
+      break; // aborted
+    }
+    if (chunk.done) break;
+    buffer += decoder.decode(chunk.value, { stream: true });
+    let idx: number;
+    while ((idx = buffer.indexOf('\n\n')) !== -1) {
+      const block = buffer.slice(0, idx);
+      buffer = buffer.slice(idx + 2);
+      const event = /event: (.*)/.exec(block)?.[1];
+      const dataLine = /data: (.*)/.exec(block)?.[1];
+      if (!event || dataLine === undefined) continue;
+      let data: unknown;
+      try {
+        data = JSON.parse(dataLine);
+      } catch {
+        continue;
+      }
+      if (event === 'start') handlers.onStart(data as RunStarted);
+      else if (event === 'stdout') handlers.onStdout((data as { chunk: string }).chunk);
+      else if (event === 'stderr') handlers.onStderr((data as { chunk: string }).chunk);
+      else if (event === 'done') handlers.onDone(data as RunDone);
+      else if (event === 'error') handlers.onError((data as { error?: string }).error ?? 'Run failed.');
     }
   }
 }

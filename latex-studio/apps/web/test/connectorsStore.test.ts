@@ -57,4 +57,10 @@ describe('useConnectorsStore', () => {
     expect(useConnectorsStore.getState().connectors[0]!.connected).toBe(false);
     expect(useConnectorsStore.getState().busyId).toBeNull();
   });
+
+  it('cancel() clears a stuck busy state so the buttons are pressable again', () => {
+    useConnectorsStore.setState({ busyId: 'google-drive' });
+    useConnectorsStore.getState().cancel();
+    expect(useConnectorsStore.getState().busyId).toBeNull();
+  });
 });

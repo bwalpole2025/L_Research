@@ -517,21 +517,46 @@ api exchanges the code, stores the token **encrypted**, and bounces back to `/pl
 Access tokens auto-refresh on expiry; disconnect revokes (where supported) and deletes
 the credential. Tokens never reach the browser and are never logged.
 
-### Vault encryption — keychain primary, env-key fallback (evaluated)
+The OAuth **app credentials** (client id/secret) can be set two ways: env vars
+(`GOOGLE_OAUTH_CLIENT_ID`/`SECRET`, …) or — preferred for a desktop-style flow — entered
+in the Connectors UI (`POST /connectors/:id/configure`) and stored **encrypted in the
+vault** under `<id>::app`, separate from the user token. So a user registers an OAuth app
+once (the UI shows the exact redirect URI to paste) and connects without editing `.env` or
+restarting. `resolveOAuthConfig` reads vault creds first, then env. Disconnect clears the
+token but keeps the saved app creds, so reconnecting is one click.
 
-Secrets are stored only as **AES-256-GCM** ciphertext in a `Credential` row. The
-master key is resolved **OS keychain first** (via the optional `keytar` native module),
-falling back to a `CONNECTORS_MASTER_KEY` env var. Evaluation:
+### Vault encryption — env override → persisted key file → keychain seed (evaluated)
 
-- *Keychain (preferred):* strongest against disk/backup theft for a host run; but it
-  needs a native module, doesn't exist headless, and breaks the Docker deploy.
-- *Env master key (fallback):* portable — works host, Docker, headless, CI — at the
-  cost of the key living in `.env`. Acceptable for a single-user localhost app.
+Secrets are stored only as **AES-256-GCM** ciphertext in a `Credential` row. The master
+key is resolved in this order:
 
-So keytar is an **optional** dependency: a failed native build never blocks boot, and
-the env key keeps the containerized path working. If neither key is available the
-vault fails closed (no plaintext secrets). The keychain stores only the 32-byte master
-key, not the per-connector secrets.
+1. `CONNECTORS_MASTER_KEY` env var — explicit override (Docker / CI / tests).
+2. A persisted **key file** `~/.latex-studio/connectors-master-key` (mode 0600) — the
+   stable, headless-safe default, read with plain `fs`.
+3. First run only: seed the file from the OS **keychain** (via the optional `keytar`
+   module) when available — so an existing keychain key is honoured — else generate a
+   random key; either way it's written to the file so every later resolve is
+   deterministic and prompt-free.
+
+Evaluation. The original "keychain-first" design proved **unreliable for a headless dev
+server**: keytar's keychain access needs interactive ACL approval, so in a background
+`tsx`/Node process it intermittently fails and 500'd every connector route. Reading a
+local key file with `fs` has none of that fragility and the same security posture as the
+env-key option (a key on disk for a single-user localhost app). keytar stays an
+**optional** dependency used to seed/back up the key, but the vault no longer *depends*
+on it — and `vault.get` returns null (→ reconnect) rather than throwing if a row can't be
+decrypted (a key change), so a key swap degrades gracefully instead of crashing. The key
+file/keychain hold only the 32-byte master key, never the per-connector secrets.
+
+### Connecting — popup, not full-page redirect
+
+OAuth consent opens in a **popup** (`window.open`), and the studio page **polls** the
+connector status until it connects (resetting when the popup closes). The earlier
+full-page `window.location` redirect stranded the user on the provider on any error and
+left the button stuck on "Connecting…" when the browser restored the page from
+back-forward cache. The api callback returns a tiny self-closing page (`window.close()`,
+with a redirect fallback when popups are blocked). Combined with capturing the web origin
+at connect time, the user stays on — and returns to — the exact origin they started from.
 
 ### Security posture (single-user localhost)
 
@@ -563,3 +588,49 @@ provenance. PDF legality is respected: arXiv permits download; CrossRef/Semantic
 are metadata-only (`capabilities.pdf = false`), so no publisher PDF is ever fetched.
 
 **Notion** content import (pages → notes / draft .tex, data-only) remains a later step.
+
+## ADR-013 — Python "Run": sandboxed local execution, separate from compilation
+
+**Status:** accepted
+
+A **Run** action executes a project's `.py` locally and streams stdout/stderr into a
+Python output window. It is deliberately **separate from Compile** (which stays
+LaTeX→PDF): plain Compile never runs Python, plain Run never compiles, and only the
+explicit **Run & Compile** chains them. Running is always a user action — the app never
+auto-runs scripts, and never runs code from fetched/imported content.
+
+### Execution model — a throwaway sandbox per run
+Each run is a fresh `docker run --rm` from the `latex-studio-pyrun` image
+(`services/pyrun`, Python 3.12 + numpy/scipy/matplotlib), **not** a `docker exec` into a
+long-lived container (the way texlive works). A new container per run gives clean
+isolation and lets network be toggled per run. The sandbox is locked down
+(`apps/api/src/run/runner.ts`):
+
+- **non-root** (`--user`, and a baked `runner` user in the image);
+- **resource caps** — `--cpus`, `--memory`, `--pids-limit` (configurable);
+- **wall-clock timeout** — a host-side timer (`PYRUN_TIMEOUT_MS`, default 60s) is the
+  authoritative limit; it `docker kill`s the container (an in-container `timeout -s KILL`
+  is a longer backstop). One run per project; a new Run supersedes the previous; **Stop**
+  kills the container.
+- **no network by default** — `--network none`; a per-project `networkEnabled` toggle
+  switches to `--network bridge` only when a script genuinely needs it;
+- **least-privilege filesystem** — the project source is mounted **read-only**; only
+  `figures/` and the run's `.pyout/<runId>/` scratch are writable. `MPLBACKEND=Agg` so
+  matplotlib never tries to open a window.
+
+So a misbehaving (or hostile) script cannot reach the host, the network, the rest of the
+app, or other projects, and is bounded in CPU, memory, and time. The clean compile and
+every other feature are unaffected by what a script does.
+
+### Figure capture & the `% !py` link
+After a run, **new images under `figures/`** are imported into the project as files (so a
+plain Compile's `\includegraphics{figures/...}` picks them up) and shown in the output
+window; scratch images under `.pyout/<runId>/` are shown but not imported. A LaTeX comment
+directive `% !py <script> -> <output>` (transparent to compilation) records which script
+produces which figure; **Run & Compile** reads these links, regenerates each figure in the
+sandbox, then compiles — so the PDF reflects the latest Python output.
+
+### `local` mode (dev/test only)
+`PYRUN_MODE=local` spawns host `python3` directly (no container). It exists so tests can
+exercise the streaming/timeout/stop/figure-capture plumbing without building the image; it
+is **not sandboxed** and must not be used in a real deployment. `docker` is the default.

@@ -44,8 +44,12 @@ export function ProjectSettingsDialog({ open, onClose }: { open: boolean; onClos
   const projectId = useEditorStore((s) => s.projectId);
   const projects = useEditorStore((s) => s.projects);
   const files = useEditorStore((s) => s.files);
-  const storedRoot = projects.find((p) => p.id === projectId)?.rootFile ?? 'main.tex';
+  const currentProject = projects.find((p) => p.id === projectId);
+  const storedRoot = currentProject?.rootFile ?? 'main.tex';
+  const storedRunTarget = currentProject?.pythonRunTarget ?? '';
+  const storedNetwork = currentProject?.networkEnabled ?? false;
   const texPaths = files.filter((f) => /\.tex$/i.test(f.path)).map((f) => f.path);
+  const pyPaths = files.filter((f) => /\.py$/i.test(f.path)).map((f) => f.path);
   const models = useAiStore((s) => s.models);
   const modelsLive = useAiStore((s) => s.modelsLive);
   const loadModels = useAiStore((s) => s.loadModels);
@@ -88,6 +92,8 @@ export function ProjectSettingsDialog({ open, onClose }: { open: boolean; onClos
   const [aiProvider, setAiProvider] = useState('anthropic');
   const [aiInstructions, setAiInstructions] = useState('');
   const [rootFile, setRootFile] = useState('main.tex');
+  const [pythonRunTarget, setPythonRunTarget] = useState('');
+  const [networkEnabled, setNetworkEnabled] = useState(false);
   const [busy, setBusy] = useState(false);
   const [indexStatus, setIndexStatus] = useState<IndexStatus | null>(null);
   const [reindexing, setReindexing] = useState(false);
@@ -100,11 +106,13 @@ export function ProjectSettingsDialog({ open, onClose }: { open: boolean; onClos
     setAiProvider(storedProvider);
     setAiInstructions(storedInstructions);
     setRootFile(storedRoot);
+    setPythonRunTarget(storedRunTarget);
+    setNetworkEnabled(storedNetwork);
     void loadModels();
     if (projectId) {
       api.libraryIndexStatus(projectId).then(setIndexStatus).catch(() => setIndexStatus(null));
     }
-  }, [open, macros, assumptions, storedModel, storedProvider, storedInstructions, storedRoot, loadModels, projectId]);
+  }, [open, macros, assumptions, storedModel, storedProvider, storedInstructions, storedRoot, storedRunTarget, storedNetwork, loadModels, projectId]);
 
   const rebuildIndex = async () => {
     if (!projectId) return;
@@ -133,7 +141,7 @@ export function ProjectSettingsDialog({ open, onClose }: { open: boolean; onClos
     }
     setBusy(true);
     try {
-      await saveSettings({ macros: table, assumptions: assume, model, aiProvider, aiInstructions, ...(rootFile ? { rootFile } : {}) });
+      await saveSettings({ macros: table, assumptions: assume, model, aiProvider, aiInstructions, pythonRunTarget, networkEnabled, ...(rootFile ? { rootFile } : {}) });
       onClose();
     } catch (err) {
       window.alert(err instanceof ApiError ? err.message : 'Failed to save settings');
@@ -181,6 +189,44 @@ export function ProjectSettingsDialog({ open, onClose }: { open: boolean; onClos
                 </option>
               ))}
             </select>
+          </section>
+
+          <section className="mt-6">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Python run</h3>
+            <p className="mt-1 text-xs text-slate-400">
+              The default <code>.py</code> the Run button executes (the sandbox). Leave blank to run whichever
+              .py file is active. Figures a script writes to <code>figures/</code> are imported into the project.
+            </p>
+            <label className="mt-2 block text-xs font-medium text-slate-600 dark:text-slate-300">
+              Run target
+              <select
+                value={pyPaths.includes(pythonRunTarget) ? pythonRunTarget : ''}
+                onChange={(e) => setPythonRunTarget(e.target.value)}
+                data-testid="run-target-select"
+                className="mt-1 w-full rounded border border-slate-300 bg-transparent px-2 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-900"
+              >
+                <option value="">Active .py file</option>
+                {!pyPaths.includes(pythonRunTarget) && pythonRunTarget && <option value={pythonRunTarget}>{pythonRunTarget} (missing)</option>}
+                {pyPaths.map((p) => (
+                  <option key={p} value={p}>
+                    {p}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="mt-3 flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
+              <input
+                type="checkbox"
+                checked={networkEnabled}
+                onChange={(e) => setNetworkEnabled(e.target.checked)}
+                data-testid="run-network-toggle"
+                className="h-3.5 w-3.5 accent-blue-500"
+              />
+              Allow network access in the sandbox
+            </label>
+            <p className="mt-1 text-xs text-slate-400">
+              Off by default — runs have no network. Enable only for a script that must fetch data.
+            </p>
           </section>
 
           <section className="mt-6">

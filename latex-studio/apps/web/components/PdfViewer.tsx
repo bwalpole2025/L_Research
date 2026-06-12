@@ -9,7 +9,6 @@ import {
   Download,
   Loader2,
   Maximize,
-  Play,
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
@@ -26,8 +25,6 @@ const MODE_FILTER: Record<PdfMode, string> = {
 
 const pdfButton =
   'inline-flex h-7 w-7 items-center justify-center rounded-md text-zinc-500 transition-colors hover:bg-zinc-200 hover:text-zinc-950 disabled:pointer-events-none disabled:opacity-35 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-50';
-const pdfPrimaryButton =
-  'inline-flex h-7 items-center gap-1.5 rounded-md bg-zinc-950 px-2.5 text-xs font-medium text-white transition-colors hover:bg-zinc-800 disabled:pointer-events-none disabled:opacity-50 dark:bg-white dark:text-zinc-950 dark:hover:bg-zinc-200';
 
 interface Highlight {
   page: number;
@@ -85,7 +82,6 @@ export function PdfViewer() {
   const compiling = useEditorStore((s) => s.compiling);
   const theme = useEditorStore((s) => s.theme);
   const forwardHighlight = useEditorStore((s) => s.forwardHighlight);
-  const compileProject = useEditorStore((s) => s.compileProject);
   const locateInPdf = useEditorStore((s) => s.locateInPdf);
   const syncInverseJump = useEditorStore((s) => s.syncInverseJump);
 
@@ -424,15 +420,6 @@ export function PdfViewer() {
           >
             <Download className="h-4 w-4" />
           </button>
-          <button
-            type="button"
-            onClick={() => void compileProject()}
-            disabled={compiling}
-            className={pdfPrimaryButton}
-          >
-            {compiling ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
-            Compile
-          </button>
         </div>
       </div>
 
@@ -444,25 +431,14 @@ export function PdfViewer() {
         data-testid="pdf-scroll"
       >
         {!hasPdf ? (
-          <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
-            {compiling ? (
-              <>
-                <Loader2 className="h-8 w-8 animate-spin text-zinc-400" />
-                <p className="text-sm font-medium text-zinc-500 dark:text-zinc-400">Compiling…</p>
-              </>
-            ) : (
-              <>
-                <p className="text-sm font-semibold text-zinc-600 dark:text-zinc-300">No preview yet</p>
-                <button
-                  type="button"
-                  onClick={() => void compileProject()}
-                  className="h-9 rounded-md bg-blue-600 px-3 text-sm font-medium text-white shadow-[0_8px_18px_rgba(37,99,235,0.2)] transition-colors hover:bg-blue-500"
-                >
-                  Compile
-                </button>
-              </>
-            )}
-          </div>
+          // While compiling, show progress; otherwise the pane stays empty (the
+          // "No preview yet" placeholder was removed — compile from the toolbar).
+          compiling ? (
+            <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
+              <Loader2 className="h-8 w-8 animate-spin text-zinc-400" />
+              <p className="text-sm font-medium text-zinc-500 dark:text-zinc-400">Compiling…</p>
+            </div>
+          ) : null
         ) : (
           <div className="flex flex-col items-center gap-4 p-4" style={{ filter: MODE_FILTER[mode] }}>
             {Array.from({ length: numPages }, (_, i) => i + 1).map((p) => (

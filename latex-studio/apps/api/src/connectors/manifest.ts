@@ -1,6 +1,11 @@
+import type { FastifyInstance } from 'fastify';
 import type { ConnectorManifest } from '@latex-studio/shared';
 import type { AppConfig } from '../config.js';
 import type { OAuthClientConfig } from '../oauth/flow.js';
+
+/** Vault key under which an OAuth connector's *app* client id/secret is stored
+ *  (separate from the user token, which lives under the bare connector id). */
+export const oauthAppKey = (id: string): string => `${id}::app`;
 
 /**
  * Static declaration of every connector. No secrets here — only ids, kinds,
@@ -54,6 +59,7 @@ export const CONNECTORS: ConnectorManifest[] = [
     scopes: ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/drive.readonly'],
     capabilities: ['list', 'read', 'write', 'delete', 'metadata'],
     description: 'Import .tex/.bib/PDFs and back projects up to your Drive. Least-privilege scopes.',
+    setupUrl: 'https://console.cloud.google.com/apis/credentials',
     wired: true,
   },
   {
@@ -64,6 +70,7 @@ export const CONNECTORS: ConnectorManifest[] = [
     scopes: ['read_content'],
     capabilities: ['import-pages'],
     description: 'Import selected Notion pages as notes / draft .tex (read-only). Content is treated as data.',
+    setupUrl: 'https://www.notion.so/my-integrations',
     wired: true,
   },
   {
@@ -74,6 +81,7 @@ export const CONNECTORS: ConnectorManifest[] = [
     scopes: ['files.content.read', 'files.content.write'],
     capabilities: ['list', 'read', 'write', 'delete', 'metadata'],
     description: 'Dropbox file store over OAuth — list, read, write, delete files.',
+    setupUrl: 'https://www.dropbox.com/developers/apps',
     wired: true,
   },
   {
@@ -84,6 +92,7 @@ export const CONNECTORS: ConnectorManifest[] = [
     scopes: ['Files.ReadWrite', 'offline_access'],
     capabilities: ['list', 'read', 'write', 'delete', 'metadata'],
     description: 'Microsoft OneDrive file store over OAuth — list, read, write, delete files.',
+    setupUrl: 'https://portal.azure.com',
     wired: true,
   },
 
@@ -185,4 +194,30 @@ export function oauthConfigFor(id: string, config: AppConfig): OAuthClientConfig
     default:
       return null;
   }
+}
+
+/** The redirect URI to register with the provider for this connector. */
+export function oauthRedirectUri(id: string, config: AppConfig): string {
+  return `${config.oauthRedirectBaseUrl.replace(/\/+$/, '')}/connectors/${id}/callback`;
+}
+
+/**
+ * Build the effective OAuth config for a connector: endpoints from the static
+ * map, client id/secret from the vault (saved via the UI) if present, else from
+ * the environment. This is what makes "connect" work without editing .env.
+ */
+export async function resolveOAuthConfig(app: FastifyInstance, id: string): Promise<OAuthClientConfig | null> {
+  const base = oauthConfigFor(id, app.config);
+  if (!base) return null;
+  const saved = await app.vault.get<{ clientId?: string; clientSecret?: string }>(oauthAppKey(id));
+  if (saved?.clientId && saved?.clientSecret) {
+    return { ...base, clientId: saved.clientId, clientSecret: saved.clientSecret };
+  }
+  return base;
+}
+
+/** Whether usable client credentials exist (env or saved in the vault). */
+export async function oauthConfigured(app: FastifyInstance, id: string): Promise<boolean> {
+  const cfg = await resolveOAuthConfig(app, id);
+  return Boolean(cfg?.clientId && cfg?.clientSecret);
 }

@@ -17,7 +17,7 @@ import type {
   XrefReport,
 } from './types';
 
-export type BottomTab = 'problems' | 'maths' | 'prose' | 'refs' | 'coderive' | 'review';
+export type BottomTab = 'problems' | 'maths' | 'prose' | 'refs' | 'coderive' | 'review' | 'python';
 export type LeftTab = 'files' | 'outline' | 'literature';
 
 const RULES_KEY = 'latex-studio:prose-rules';

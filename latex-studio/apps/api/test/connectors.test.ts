@@ -65,8 +65,8 @@ describe('connector routes', () => {
   });
 
   it('the callback exchanges the code, stores an ENCRYPTED token, and never echoes it', async () => {
-    // 1. Begin → capture state.
-    const connectRes = await app.inject({ method: 'POST', url: '/connectors/google-drive/connect', headers: auth });
+    // 1. Begin from a localhost origin → capture state (origin steers the bounce-back).
+    const connectRes = await app.inject({ method: 'POST', url: '/connectors/google-drive/connect', headers: auth, payload: { origin: 'http://localhost:3000' } });
     const state = new URL((connectRes.json() as { authUrl: string }).authUrl).searchParams.get('state')!;
 
     // 2. Mock Google's token + userinfo endpoints.
@@ -82,8 +82,10 @@ describe('connector routes', () => {
 
     // 3. Hit the callback (public route — no bearer, like a real provider redirect).
     const cb = await app.inject({ method: 'GET', url: `/connectors/google-drive/callback?code=abc&state=${encodeURIComponent(state)}` });
-    expect(cb.statusCode).toBe(302);
-    expect(cb.headers.location).toContain('/plugins?connected=google-drive');
+    expect(cb.statusCode).toBe(200); // a self-closing popup page (not a 302)
+    expect(cb.headers['content-type']).toContain('text/html');
+    // Returns to the SAME origin we started from (localhost), not the 127.0.0.1 default.
+    expect(cb.payload).toContain('http://localhost:3000/plugins?connected=google-drive');
 
     // 4. The token is stored as ciphertext, never plaintext, and no route returns it.
     const row = await app.prisma.credential.findUnique({ where: { connectorId: 'google-drive' } });
@@ -105,15 +107,45 @@ describe('connector routes', () => {
     expect(await app.vault.has('google-drive')).toBe(false);
   });
 
-  it('callback with an unknown state fails safe (redirect with error, not a crash)', async () => {
+  it('callback with an unknown state fails safe (error page, not a crash)', async () => {
     const cb = await app.inject({ method: 'GET', url: '/connectors/google-drive/callback?code=x&state=bogus' });
-    expect(cb.statusCode).toBe(302);
-    expect(cb.headers.location).toContain('error=');
+    expect(cb.statusCode).toBe(200);
+    expect(cb.payload).toContain('error=');
     expect(await app.vault.has('google-drive')).toBe(false);
   });
 
   it('rejects an unauthenticated non-callback connector route', async () => {
     const res = await app.inject({ method: 'GET', url: '/connectors' }); // no bearer
     expect(res.statusCode).toBe(401);
+  });
+
+  // Dropbox has no env credentials in this test config — so it exercises the
+  // pure UI-setup path: connect-before-setup is a clear prompt, /configure saves
+  // the client creds (encrypted), and connect then yields a consent URL.
+  it('configure saves OAuth app credentials and unblocks connect (no .env needed)', async () => {
+    // Not configured yet → status says so, and connect prompts for setup.
+    const before = await app.inject({ method: 'GET', url: '/connectors/dropbox', headers: auth });
+    expect(before.json()).toMatchObject({ configured: false, redirectUri: expect.stringContaining('/connectors/dropbox/callback') });
+
+    const blocked = await app.inject({ method: 'POST', url: '/connectors/dropbox/connect', headers: auth });
+    expect(blocked.statusCode).toBe(400);
+    expect((blocked.json() as { needsSetup?: boolean }).needsSetup).toBe(true);
+
+    // Save client id/secret via the UI route.
+    const cfg = await app.inject({ method: 'POST', url: '/connectors/dropbox/configure', headers: auth, payload: { clientId: 'DBX_ID', clientSecret: 'DBX_SECRET' } });
+    expect(cfg.statusCode).toBe(200);
+    expect((cfg.json() as { status: { configured: boolean } }).status.configured).toBe(true);
+    expect(cfg.payload).not.toContain('DBX_SECRET'); // secret never echoed
+
+    // The stored app creds are ciphertext, not plaintext.
+    const row = await app.prisma.credential.findUnique({ where: { connectorId: 'dropbox::app' } });
+    expect(JSON.stringify(row)).not.toContain('DBX_SECRET');
+
+    // Now connect yields a consent URL carrying our client id.
+    const connect = await app.inject({ method: 'POST', url: '/connectors/dropbox/connect', headers: auth });
+    expect(connect.statusCode).toBe(200);
+    expect(new URL((connect.json() as { authUrl: string }).authUrl).searchParams.get('client_id')).toBe('DBX_ID');
+
+    await app.prisma.credential.deleteMany({ where: { connectorId: 'dropbox::app' } });
   });
 });

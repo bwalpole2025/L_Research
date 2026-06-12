@@ -4,9 +4,11 @@ import { useEffect, useState } from 'react';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { useEditorStore } from '@/lib/store';
 import { useAiStore } from '@/lib/aiStore';
+import { useRunStore } from '@/lib/runStore';
 import { useThesisStore } from '@/lib/thesisStore';
 import { useCoderiveStore } from '@/lib/coderiveStore';
 import { Toolbar } from './Toolbar';
+import { RunPythonPicker } from './RunPythonPicker';
 import { EditorPane } from './EditorPane';
 import { PdfViewer } from './PdfViewer';
 import { SnapshotsDialog } from './SnapshotsDialog';
@@ -23,6 +25,7 @@ import { PreSubmitDialog } from './thesis/PreSubmitDialog';
 import { CoderiveDialog } from './coderive/CoderiveDialog';
 import { UploadConfirmDialog, TrashDialog } from './library/LibraryDialogs';
 import { KeyboardReference } from './KeyboardReference';
+import { ProductTour } from './ProductTour';
 
 function CreateFirstProject() {
   const createProject = useEditorStore((s) => s.createProject);
@@ -82,6 +85,7 @@ export function EditorApp() {
   const openPreSubmit = useThesisStore((s) => s.openPreSubmit);
   const setLeftTab = useThesisStore((s) => s.setLeftTab);
   const openCoderive = useCoderiveStore((s) => s.openDialog);
+  const runActive = useRunStore((s) => s.runActive);
   const [snapshotsOpen, setSnapshotsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [mathOpen, setMathOpen] = useState(false);
@@ -107,6 +111,10 @@ export function EditorApp() {
           setMathOpen(true);
           void checkDerivation();
         } else void compileProject();
+      } else if (key === 'r' && !e.shiftKey) {
+        // Cmd/Ctrl+R → Run Python (when the editor didn't already handle it).
+        e.preventDefault();
+        runActive();
       } else if (key === '/') {
         e.preventDefault();
         setKeyboardOpen((v) => !v);
@@ -129,7 +137,7 @@ export function EditorApp() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [compileProject, checkDerivation, runAudit, runProse, openPreSubmit, setLeftTab, openCoderive]);
+  }, [compileProject, checkDerivation, runAudit, runProse, openPreSubmit, setLeftTab, openCoderive, runActive]);
 
   if (!ready) {
     return (
@@ -202,7 +210,9 @@ export function EditorApp() {
       <CoderiveDialog />
       <UploadConfirmDialog />
       <TrashDialog />
+      <RunPythonPicker />
       <KeyboardReference open={keyboardOpen} onClose={() => setKeyboardOpen(false)} />
+      {projects.length > 0 && <ProductTour />}
     </div>
   );
 }

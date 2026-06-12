@@ -172,6 +172,8 @@ interface EditorState {
     aiInstructions?: string;
     aiProvider?: string;
     rootFile?: string;
+    pythonRunTarget?: string;
+    networkEnabled?: boolean;
   }) => Promise<void>;
   checkDerivation: () => Promise<void>;
   clearMath: () => void;
@@ -686,6 +688,8 @@ export const useEditorStore = create<EditorState>((set, get) => {
                 aiInstructions: updated.aiInstructions ?? '',
                 aiProvider: updated.aiProvider ?? 'anthropic',
                 rootFile: updated.rootFile,
+                pythonRunTarget: updated.pythonRunTarget ?? '',
+                networkEnabled: updated.networkEnabled ?? false,
               }
             : p,
         ),

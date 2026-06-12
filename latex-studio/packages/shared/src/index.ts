@@ -43,6 +43,49 @@ export interface Project {
   aiInstructions?: string;
   /** Model connector powering AI: "anthropic" | "chatgpt" | "gemini". */
   aiProvider?: string;
+  /** Default entry .py for the "Run" action; empty ⇒ run the active file. */
+  pythonRunTarget?: string;
+  /** Whether the Python sandbox may access the network (off by default). */
+  networkEnabled?: boolean;
+}
+
+// ─── Python "Run" (sandboxed local execution) ────────────────────────────────
+
+/** Lifecycle of a Python run, surfaced in the output window's status line. */
+export type RunStatus = 'running' | 'success' | 'failed' | 'timed-out' | 'stopped';
+
+/** An image produced by a run (a figure or a scratch-dir artefact). */
+export interface RunArtifact {
+  /** File name, e.g. "kdv.png". */
+  name: string;
+  /** Project-relative path, e.g. "figures/kdv.png" or ".pyout/<runId>/plot.png". */
+  path: string;
+  /** API-relative URL to fetch the bytes (incl. cache-buster). */
+  url: string;
+  kind: 'figure' | 'scratch';
+}
+
+/** SSE `start` payload: the run has begun. */
+export interface RunStarted {
+  runId: string;
+  /** The resolved script path being executed. */
+  script: string;
+}
+
+/** SSE `done` payload: terminal result of a run. */
+export interface RunDone {
+  exitCode: number | null;
+  durationMs: number;
+  status: RunStatus;
+  artifacts: RunArtifact[];
+}
+
+/** A `% !py <script> -> <output>` link parsed from the document's .tex files. */
+export interface PyFigureLink {
+  /** The generating script, project-relative, e.g. "kdv_spectral_rk4.py". */
+  script: string;
+  /** The figure it produces, project-relative, e.g. "figures/kdv.png". */
+  output: string;
 }
 
 /**
@@ -1165,6 +1208,8 @@ export interface ConnectorManifest {
   description: string;
   /** For subscriptionCli connectors: the CLI command + how to sign in. */
   cli?: { command: string; signInHint: string; installHint: string };
+  /** For oauth2 connectors: where to register the OAuth app (provider console). */
+  setupUrl?: string;
   /** True once a real adapter is wired; false = listed-but-scaffolded. */
   wired: boolean;
 }
@@ -1189,6 +1234,12 @@ export interface ConnectorStatus {
   /** Human-readable extra status (e.g. "CLI not installed", "needs reconnect"). */
   detail?: string;
   cli?: { command: string; signInHint: string; installHint: string };
+  /** OAuth only: whether client id/secret are set (env or saved in the vault). */
+  configured?: boolean;
+  /** OAuth only: the exact redirect URI to register with the provider. */
+  redirectUri?: string;
+  /** OAuth only: where to register the OAuth app (the provider's console). */
+  setupUrl?: string;
 }
 
 /** Response of `POST /connectors/:id/connect`. */

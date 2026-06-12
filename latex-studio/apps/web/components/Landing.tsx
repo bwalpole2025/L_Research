@@ -38,7 +38,7 @@ function solitonPath(amplitude: number, width: number): string {
     return 1 / (c * c);
   };
   const pts: string[] = [];
-  for (let x = -160; x <= 560; x += 4) {
+  for (let x = -160; x <= 560; x += 1) {
     let y = 0;
     for (const c of [50, 200, 350, 500]) y += sech2(width * (x - c));
     pts.push(`${x},${(86 - amplitude * y).toFixed(2)}`);
@@ -132,10 +132,10 @@ export function Landing() {
           <svg viewBox="0 0 400 100" preserveAspectRatio="none" className="absolute inset-0 h-full w-full">
             <line x1="0" y1="86" x2="400" y2="86" stroke="#1e293b" strokeWidth="1" />
             <g className="wave-slow">
-              <path d={slowWave} fill="none" stroke="#155e75" strokeWidth="1.2" opacity="0.55" />
+              <path d={slowWave} fill="none" stroke="#155e75" strokeWidth="1.2" opacity="0.55" vectorEffect="non-scaling-stroke" />
             </g>
             <g className="wave-main">
-              <path d={mainWave} fill="none" stroke="url(#solitonGrad)" strokeWidth="2" />
+              <path d={mainWave} fill="none" stroke="url(#solitonGrad)" strokeWidth="2" vectorEffect="non-scaling-stroke" />
             </g>
             <defs>
               <linearGradient id="solitonGrad" x1="0" y1="0" x2="1" y2="0">
@@ -197,8 +197,8 @@ export function Landing() {
         }
         /* Soliton pulses are centred every 150 viewBox units; translating by
            −150 returns the train to its start → a seamless infinite journey. */
-        .wave-main { animation: wave-travel 7s linear infinite; }
-        .wave-slow { animation: wave-travel 13s linear infinite; }
+        .wave-main { animation: wave-travel 9s linear infinite; will-change: transform; }
+        .wave-slow { animation: wave-travel 16s linear infinite; will-change: transform; }
         @keyframes wave-travel {
           from { transform: translateX(0); }
           to { transform: translateX(-150px); }

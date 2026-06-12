@@ -12,6 +12,7 @@ import { useThesisStore } from '@/lib/thesisStore';
 export function CompileStatusPill() {
   const compiling = useEditorStore((s) => s.compiling);
   const compileStatus = useEditorStore((s) => s.compileStatus);
+  const pdfUrl = useEditorStore((s) => s.pdfUrl);
   const diagnostics = useEditorStore((s) => s.diagnostics);
   const revealLocation = useEditorStore((s) => s.revealLocation);
   const projects = useEditorStore((s) => s.projects);
@@ -56,7 +57,11 @@ export function CompileStatusPill() {
       data-testid="compile-status"
       data-status={compiling ? 'compiling' : (compileStatus ?? '')}
       onClick={open}
-      title="Open the Problems panel"
+      title={
+        !compiling && compileStatus !== 'success' && pdfUrl
+          ? 'This run produced no PDF — the viewer shows the LAST SUCCESSFUL build. Click for details.'
+          : 'Open the Problems panel'
+      }
       className={`flex h-9 items-center gap-1.5 rounded-[9px] border px-3 text-[12.5px] font-medium transition-colors ${tone}`}
     >
       <Icon className={`h-3.5 w-3.5 ${compiling ? 'animate-spin' : ''}`} />

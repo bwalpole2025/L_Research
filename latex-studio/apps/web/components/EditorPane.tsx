@@ -4,6 +4,7 @@ import { useCallback, useMemo } from 'react';
 import { Code2, Eye } from 'lucide-react';
 import { useEditorStore } from '@/lib/store';
 import { useAiStore } from '@/lib/aiStore';
+import { useRunStore } from '@/lib/runStore';
 import { usePreviewStore } from '@/lib/previewStore';
 import { isBinaryPath } from '@/lib/fileKind';
 import { EditorTabs } from './EditorTabs';
@@ -26,6 +27,7 @@ export function EditorPane() {
   const compileProject = useEditorStore((s) => s.compileProject);
   const consumeReveal = useEditorStore((s) => s.consumeReveal);
   const openInlineEdit = useAiStore((s) => s.openInlineEdit);
+  const runActive = useRunStore((s) => s.runActive);
 
   const cursorFor = useCallback((id: string) => cursors[id], [cursors]);
 
@@ -113,6 +115,7 @@ export function EditorPane() {
         ) : (
           <CodeEditor
             fileId={activeFileId}
+            filePath={activePath ?? null}
             content={activeFileId ? contents[activeFileId] : undefined}
             theme={theme}
             cursorFor={cursorFor}
@@ -121,6 +124,7 @@ export function EditorPane() {
             onCursor={setCursor}
             onRequestSnapshot={onRequestSnapshot}
             onCompile={() => void compileProject()}
+            onRunPython={runActive}
             onInlineEdit={openInlineEdit}
             onRevealHandled={consumeReveal}
             mathMarkers={mathMarkers}

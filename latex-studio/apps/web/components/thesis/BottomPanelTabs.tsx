@@ -1,8 +1,9 @@
 'use client';
 
-import { CircleAlert, FileSearch, Link2, Sigma, Sparkles, SpellCheck, type LucideIcon } from 'lucide-react';
+import { CircleAlert, FileSearch, Link2, Sigma, Sparkles, SpellCheck, Terminal, type LucideIcon } from 'lucide-react';
 import { useEditorStore } from '@/lib/store';
 import { useThesisStore, type BottomTab } from '@/lib/thesisStore';
+import { useRunStore } from '@/lib/runStore';
 import { DiagnosticsPanel } from '../DiagnosticsPanel';
 import { MathsAuditPanel } from './MathsAuditPanel';
 import { ProsePanel } from './ProsePanel';
@@ -11,6 +12,7 @@ import { CoderivePanel } from '../coderive/CoderivePanel';
 import { useCoderiveStore } from '@/lib/coderiveStore';
 import { ReviewPanel } from '../review/ReviewPanel';
 import { useReviewStore } from '@/lib/reviewStore';
+import { PythonOutputPanel } from '../PythonOutputPanel';
 
 const TABS: { key: BottomTab; label: string; icon: LucideIcon }[] = [
   { key: 'problems', label: 'Problems', icon: CircleAlert },
@@ -19,6 +21,7 @@ const TABS: { key: BottomTab; label: string; icon: LucideIcon }[] = [
   { key: 'refs', label: 'References', icon: Link2 },
   { key: 'coderive', label: 'Co-derive', icon: Sparkles },
   { key: 'review', label: 'Review', icon: FileSearch },
+  { key: 'python', label: 'Python', icon: Terminal },
 ];
 
 export function BottomPanelTabs() {
@@ -32,6 +35,8 @@ export function BottomPanelTabs() {
   const review = useReviewStore((s) => s.findings);
   const reviewRefuted = useReviewStore((s) => s.totals?.refutedMaths ?? 0);
   const hasErrorDiagnostic = useEditorStore((s) => s.diagnostics.some((d) => d.severity === 'error'));
+  const runFigures = useRunStore((s) => s.figures.length);
+  const runFailed = useRunStore((s) => s.status === 'failed' || s.status === 'timed-out');
 
   const counts: Record<BottomTab, number> = {
     problems,
@@ -40,6 +45,7 @@ export function BottomPanelTabs() {
     refs: xref ? xref.totals.error : 0,
     coderive: coderive ? coderive.candidates.filter((c) => c.status === 'verified').length : 0,
     review: review.length,
+    python: runFigures,
   };
   const danger: Record<BottomTab, boolean> = {
     problems: hasErrorDiagnostic,
@@ -48,6 +54,7 @@ export function BottomPanelTabs() {
     refs: (xref?.totals.error ?? 0) > 0,
     coderive: false,
     review: reviewRefuted > 0,
+    python: runFailed,
   };
 
   return (
@@ -93,6 +100,7 @@ export function BottomPanelTabs() {
         {tab === 'refs' && <XrefPanel />}
         {tab === 'coderive' && <CoderivePanel />}
         {tab === 'review' && <ReviewPanel />}
+        {tab === 'python' && <PythonOutputPanel />}
       </div>
     </div>
   );

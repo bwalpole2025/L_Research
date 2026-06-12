@@ -22,6 +22,9 @@ const updateProjectBody = z.object({
   aiProvider: z.enum(['anthropic', 'chatgpt', 'gemini']).optional(),
   // Move the project between Home folders; null = root. Purely organisational.
   folderId: z.string().nullable().optional(),
+  // Python "Run" settings.
+  pythonRunTarget: z.string().max(512).optional(),
+  networkEnabled: z.boolean().optional(),
 });
 
 /** Serialise a Project row to the shared `Project` shape (ISO timestamps). */
@@ -37,6 +40,8 @@ function serialiseProject(p: {
   model: string;
   aiInstructions: string;
   aiProvider: string;
+  pythonRunTarget: string;
+  networkEnabled: boolean;
 }) {
   return {
     id: p.id,
@@ -50,6 +55,8 @@ function serialiseProject(p: {
     model: p.model,
     aiInstructions: p.aiInstructions ?? '',
     aiProvider: p.aiProvider ?? 'anthropic',
+    pythonRunTarget: p.pythonRunTarget ?? '',
+    networkEnabled: p.networkEnabled ?? false,
   };
 }
 
@@ -119,6 +126,8 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
     if (parsed.data.assumptions !== undefined) data.assumptions = parsed.data.assumptions;
     if (parsed.data.aiInstructions !== undefined) data.aiInstructions = parsed.data.aiInstructions;
     if (parsed.data.aiProvider !== undefined) data.aiProvider = parsed.data.aiProvider;
+    if (parsed.data.pythonRunTarget !== undefined) data.pythonRunTarget = parsed.data.pythonRunTarget;
+    if (parsed.data.networkEnabled !== undefined) data.networkEnabled = parsed.data.networkEnabled;
     if (parsed.data.model !== undefined) {
       const { models } = await getModels(app.config.model);
       if (!isAcceptableModel(parsed.data.model, models)) {

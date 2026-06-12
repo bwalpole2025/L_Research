@@ -7,6 +7,7 @@ import {
   FileCode,
   FileImage,
   FilePlus,
+  FileTerminal,
   FolderClosed,
   FolderOpen,
   FolderPlus,
@@ -19,7 +20,7 @@ import {
 import { useEditorStore } from '@/lib/store';
 import { useThesisStore } from '@/lib/thesisStore';
 import { ApiError } from '@/lib/api';
-import { ALL_EXTENSIONS, isBinaryPath } from '@/lib/fileKind';
+import { ALL_EXTENSIONS, isBinaryPath, isPythonPath } from '@/lib/fileKind';
 import { itemsFromDataTransfer, itemsFromFileList } from '@/lib/dropUpload';
 import { basename, buildTree, parentPath, type TreeNode } from '@/lib/treeUtils';
 
@@ -265,7 +266,9 @@ export function FileTree() {
           }`}
           style={pad}
         >
-          {isBinaryPath(node.path) ? (
+          {isPythonPath(node.path) ? (
+            <FileTerminal className="ml-[18px] h-4 w-4 shrink-0 text-[#3776ab]" />
+          ) : isBinaryPath(node.path) ? (
             <FileImage className="ml-[18px] h-4 w-4 shrink-0 text-violet-500" />
           ) : (
             <FileCode className="ml-[18px] h-4 w-4 shrink-0 text-zinc-400" />

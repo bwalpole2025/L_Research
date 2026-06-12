@@ -33,6 +33,7 @@ describe('compile + synctex routes (mock runner)', () => {
   let app: FastifyInstance;
   let workspace: string;
   let projectId: string;
+  let emitPdf = true;
 
   beforeAll(async () => {
     workspace = await mkdtemp(join(tmpdir(), 'ls-compile-'));
@@ -51,8 +52,10 @@ describe('compile + synctex routes (mock runner)', () => {
         const dir = join(workspace, id);
         await mkdir(dir, { recursive: true });
         await writeFile(join(dir, 'main.log'), undefinedLog, 'utf8');
-        await writeFile(join(dir, 'main.pdf'), '%PDF-1.4\n%mock\n', 'utf8');
-        await writeFile(join(dir, 'main.synctex.gz'), 'mock', 'utf8');
+        if (emitPdf) {
+          await writeFile(join(dir, 'main.pdf'), '%PDF-1.4\n%mock\n', 'utf8');
+          await writeFile(join(dir, 'main.synctex.gz'), 'mock', 'utf8');
+        }
         return { code: 1, stdout: '', stderr: '', timedOut: false };
       },
       async synctex(id, args) {
@@ -87,7 +90,8 @@ describe('compile + synctex routes (mock runner)', () => {
     await rm(workspace, { recursive: true, force: true });
   });
 
-  it('compiles, returns diagnostics + pdfUrl, and logs the run', async () => {
+  it('a PDF-producing run is NEVER red: log errors demote to ORANGE, status is success', async () => {
+    emitPdf = true;
     const res = await app.inject({
       method: 'POST',
       url: `/projects/${projectId}/compile`,
@@ -95,15 +99,34 @@ describe('compile + synctex routes (mock runner)', () => {
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(body.status).toBe('error'); // fixture log contains an error
+    // The fixture log contains `! Undefined control sequence`, but a fresh PDF
+    // came out — red is reserved for "no PDF produced".
+    expect(body.status).toBe('success');
     expect(body.pdfUrl).toMatch(new RegExp(`^/projects/${projectId}/pdf\\?rev=\\d+$`));
+    const diags = body.diagnostics as Array<{ severity: string; file?: string; line?: number }>;
+    expect(diags.some((d) => d.severity === 'error')).toBe(false);
+    expect(diags.find((d) => d.severity === 'warning-important')).toMatchObject({ file: 'main.tex', line: 7 });
+
+    const logs = await app.prisma.compileLog.count({ where: { projectId } });
+    expect(logs).toBeGreaterThanOrEqual(1);
+  });
+
+  it('a run that produced NO fresh PDF keeps its errors RED (a stale PDF does not mask failure)', async () => {
+    emitPdf = false;
+    await new Promise((r) => setTimeout(r, 15)); // ensure the stale PDF mtime < this run's start
+    const res = await app.inject({
+      method: 'POST',
+      url: `/projects/${projectId}/compile`,
+      headers: auth,
+    });
+    emitPdf = true;
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.status).toBe('error');
     const error = (body.diagnostics as Array<{ severity: string; file?: string; line?: number }>).find(
       (d) => d.severity === 'error',
     );
     expect(error).toMatchObject({ file: 'main.tex', line: 7 });
-
-    const logs = await app.prisma.compileLog.count({ where: { projectId } });
-    expect(logs).toBeGreaterThanOrEqual(1);
   });
 
   it('serves the produced PDF', async () => {

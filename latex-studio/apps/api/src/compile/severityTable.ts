@@ -5,10 +5,11 @@ import type { DiagnosticSeverity } from '@latex-studio/shared';
  * log entries, maintained as ONE documented table (fixtures in
  * test/fixtures/logs + logParser tests assert every row).
  *
- *  ERROR (red)               compilation failed or the PDF is wrong/incomplete.
- *                            Rule of thumb: any line beginning `!`, or anything
- *                            that makes latexmk exit non-zero, is an ERROR and
- *                            is NEVER downgraded.
+ *  ERROR (red)               the run produced NO PDF. A `!` line classifies as
+ *                            an error here, but the compile service demotes it
+ *                            to ORANGE when the run still emitted a fresh PDF
+ *                            (nonstop mode often recovers) — red strictly means
+ *                            "nothing came out to look at".
  *  WARNING-IMPORTANT (orange) compiles, but the OUTPUT IS WRONG and misleads:
  *                            ?? references, [?] citations, duplicated labels,
  *                            page-overflowing boxes, dropped glyphs.

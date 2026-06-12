@@ -14,6 +14,7 @@ import { projectFolderRoutes } from './routes/projectFolders.js';
 import { fileRoutes } from './routes/files.js';
 import { snapshotRoutes } from './routes/snapshots.js';
 import { compileRoutes } from './routes/compile.js';
+import { runRoutes } from './routes/run.js';
 import { mathcheckRoutes } from './routes/mathcheck.js';
 import { aiRoutes } from './routes/ai.js';
 import { thesisRoutes } from './routes/thesis.js';
@@ -83,6 +84,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await app.register(fileRoutes);
   await app.register(snapshotRoutes);
   await app.register(compileRoutes);
+  await app.register(runRoutes);
   await app.register(mathcheckRoutes);
   await app.register(aiRoutes);
   await app.register(thesisRoutes);

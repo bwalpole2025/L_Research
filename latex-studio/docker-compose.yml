@@ -62,6 +62,20 @@ services:
     volumes:
       - "${COMPILE_WORKSPACE:-./.compile-workspace}:/workspace"
 
+  # Python sandbox for the "Run" feature (numpy/scipy/matplotlib). This service
+  # exists to BUILD the `latex-studio-pyrun` image; each script execution is a
+  # fresh, throwaway `docker run --rm` from that image — non-root, CPU/memory/PID
+  # capped, wall-clock timed, network OFF by default (per-project opt-in). See
+  # apps/api/src/run/runner.ts and ADR-013. Build with `docker compose build pyrun`.
+  pyrun:
+    build:
+      context: ./services/pyrun
+    image: latex-studio-pyrun
+    container_name: latex-studio-pyrun
+    restart: unless-stopped
+    volumes:
+      - "${COMPILE_WORKSPACE:-./.compile-workspace}:/workspace"
+
   api:
     profiles: ["full"]
     build:

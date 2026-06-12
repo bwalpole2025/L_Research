@@ -7,7 +7,7 @@ export interface UploadItem {
   relativePath: string;
 }
 
-export const TEXT_EXTENSIONS = ['.tex', '.bib', '.bst', '.sty', '.cls', '.clo', '.txt', '.md', '.csv'];
+export const TEXT_EXTENSIONS = ['.tex', '.bib', '.bst', '.sty', '.cls', '.clo', '.txt', '.md', '.csv', '.py'];
 export const BINARY_EXTENSIONS = [
   '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tiff', '.tif', '.ico', '.svg',
   '.pdf', '.eps', '.ps', '.ttf', '.otf', '.woff', '.woff2',
@@ -31,6 +31,10 @@ export function isAllowedPath(path: string): boolean {
 
 export function isImagePath(path: string): boolean {
   return ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.ico'].includes(extOf(path));
+}
+
+export function isPythonPath(path: string): boolean {
+  return extOf(path) === '.py';
 }
 
 const MIME: Record<string, string> = {
