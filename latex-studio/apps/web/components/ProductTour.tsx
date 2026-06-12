@@ -27,6 +27,13 @@ const TOUR_ID = 'compile';
 const ANCHOR_SELECTOR = '[data-tour="compile"]';
 const CARD_W = 340;
 const GAP = 12;
+const REPLAY_EVENT = 'latex-studio:replay-tour';
+
+/** Re-open the product tour on demand — e.g. from a "Replay tour" menu item.
+ *  Opens it regardless of the once-per-user seen flag. */
+export function replayProductTour(): void {
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event(REPLAY_EVENT));
+}
 
 interface Rect {
   top: number;
@@ -124,6 +131,13 @@ export function ProductTour() {
     };
     document.addEventListener('click', onClick, true);
     return () => document.removeEventListener('click', onClick, true);
+  }, []);
+
+  // Explicit replay (the "Replay tour" menu item) — opens regardless of seen.
+  useEffect(() => {
+    const replay = () => setOpen(true);
+    window.addEventListener(REPLAY_EVENT, replay);
+    return () => window.removeEventListener(REPLAY_EVENT, replay);
   }, []);
 
   // Track the anchor button's position while open.

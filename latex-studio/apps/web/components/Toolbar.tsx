@@ -6,6 +6,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ClipboardCheck,
+  Compass,
   Download,
   EllipsisVertical,
   FileSearch,
@@ -37,6 +38,7 @@ import { ApiError } from '@/lib/api';
 import { loadSession } from '@/lib/session';
 import { SaveIndicator } from './SaveIndicator';
 import { CompileStatusPill } from './CompileStatusPill';
+import { replayProductTour } from './ProductTour';
 
 /**
  * EDITOR TOP BAR — the "LaTeX Studio – Editor" design: back chevron, serif
@@ -233,6 +235,16 @@ export function Toolbar({ onOpenSnapshots, onOpenSettings, onCheckMath }: Toolba
               <Plus className="h-4 w-4" /> New project
             </button>
             <div className="mx-2 my-1.5 h-px bg-zinc-200 dark:bg-[#1a2133]" />
+            <button
+              type="button"
+              aria-label="Replay product tour"
+              title="Replay the product tour"
+              data-testid="replay-tour"
+              onClick={tool(replayProductTour)}
+              className={menuItem}
+            >
+              <Compass className="h-4 w-4" /> Replay tour
+            </button>
             <button type="button" aria-label="Project settings" title="Project settings (macros, assumptions)" onClick={tool(onOpenSettings)} className={menuItem}>
               <Settings className="h-4 w-4" /> Project settings
             </button>
