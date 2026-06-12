@@ -10,6 +10,9 @@ import {
   readLiteraturePdf,
   writeLiteraturePdf,
 } from '../literature/storage.js';
+import { indexLibraryItem, libraryIndexStatus, reindexProject } from '../rag/indexer.js';
+import { literatureSource, LiteratureSourceError } from '../literature/sources/index.js';
+import { embeddingAvailable } from '../rag/embeddings.js';
 
 type ItemRow = {
   id: string;
@@ -59,6 +62,11 @@ const uploadBody = z.object({
   folderId: z.string().nullable().optional(),
 });
 const importBibBody = z.object({ bibContent: z.string(), folderId: z.string().nullable().optional() });
+const fromLiteratureBody = z.object({
+  source: z.enum(['arxiv', 'crossref', 'zotero', 'semantic-scholar']),
+  externalId: z.string().trim().min(1).max(300),
+  folderId: z.string().nullable().optional(),
+});
 const itemPatch = z
   .object({
     title: z.string(),
@@ -269,7 +277,72 @@ export async function libraryRoutes(app: FastifyInstance): Promise<void> {
         ...(extraction.text ? { extractedText: extraction.text, extractedAt: new Date() } : {}),
       },
     });
+    // Index for RAG retrieval (best-effort: the upload never fails on indexing).
+    if (extraction.text) {
+      await indexLibraryItem(app.prisma, app.config.mathcheckUrl, item, extraction.pageOffsets).catch((err) =>
+        app.log.warn({ err }, 'library indexing failed (upload)'),
+      );
+    }
     return reply.code(201).send(serializeItem(item));
+  });
+
+  // Add a search result FROM a literature connector into the library: metadata +
+  // BibTeX + (where the source legally permits) the PDF, extracted + RAG-indexed.
+  // Provenance is recorded on `source`. Every fetch is an explicit user action.
+  app.post<{ Params: { id: string } }>('/projects/:id/library/from-literature', async (request, reply) => {
+    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
+    if (!project) return reply.callNotFound();
+    const parsed = fromLiteratureBody.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'Invalid body', details: parsed.error.flatten() });
+
+    let src;
+    try {
+      src = await literatureSource(app, parsed.data.source);
+    } catch (err) {
+      const msg = err instanceof LiteratureSourceError ? err.message : 'Unknown literature source';
+      return reply.code(400).send({ error: msg });
+    }
+
+    const meta = await src.getMetadata(parsed.data.externalId).catch(() => null);
+    if (!meta) return reply.code(404).send({ error: 'The source returned no metadata for that id.' });
+
+    // Fetch the PDF ONLY when the source permits it (arXiv yes; publishers no).
+    let pdfBase64: string | null = null;
+    if (src.capabilities.pdf && src.getPDF) {
+      pdfBase64 = await src.getPDF(parsed.data.externalId).then((b) => Buffer.from(b).toString('base64')).catch(() => null);
+    }
+
+    let storagePath = '';
+    let size = 0;
+    let extraction: { text: string; title: string; author: string; pageOffsets: { page: number; charStart: number }[] } | null = null;
+    if (pdfBase64) {
+      ({ storagePath, size } = await writeLiteraturePdf(ws(), project.id, pdfBase64));
+      extraction = await extractViaMathcheck(app.config.mathcheckUrl, pdfBase64);
+    }
+
+    const item = await app.prisma.literatureItem.create({
+      data: {
+        projectId: project.id,
+        folderId: parsed.data.folderId ?? null,
+        title: meta.title,
+        authors: meta.authors,
+        year: meta.year,
+        source: meta.source,
+        fileName: pdfBase64 ? `${parsed.data.source}-${parsed.data.externalId}.pdf`.replace(/[^\w.-]+/g, '_') : '',
+        storagePath,
+        fileSizeBytes: size,
+        ...(meta.doi ? { doi: meta.doi } : {}),
+        ...(meta.abstract ? { abstract: meta.abstract } : {}),
+        ...(extraction?.text ? { extractedText: extraction.text, extractedAt: new Date() } : {}),
+      },
+    });
+    if (extraction?.text) {
+      await indexLibraryItem(app.prisma, app.config.mathcheckUrl, item, extraction.pageOffsets).catch((err) =>
+        app.log.warn({ err }, 'library indexing failed (from-literature)'),
+      );
+    }
+    await app.vault.touchLastUsed(parsed.data.source).catch(() => undefined);
+    return reply.code(201).send({ item: serializeItem(item), pdfFetched: pdfBase64 !== null });
   });
 
   app.post<{ Params: { id: string } }>('/projects/:id/library/import-bib', async (request, reply) => {
@@ -317,7 +390,40 @@ export async function libraryRoutes(app: FastifyInstance): Promise<void> {
       where: { id: item.id },
       data: { extractedText: extraction.text, extractedAt: new Date() },
     });
+    // The text changed → re-index (idempotent delete + insert).
+    await indexLibraryItem(app.prisma, app.config.mathcheckUrl, updated, extraction.pageOffsets).catch((err) =>
+      app.log.warn({ err }, 'library indexing failed (re-extract)'),
+    );
     return { ...serializeItem(updated), pageCount: extraction.pageCount };
+  });
+
+  // ── RAG index (local embeddings over the library) ───────────────────────────
+
+  /** Index coverage for Settings: items / extracted / embedded / chunk count. */
+  app.get<{ Params: { id: string } }>('/projects/:id/library/index-status', async (request, reply) => {
+    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
+    if (!project) return reply.callNotFound();
+    const [status, available] = await Promise.all([
+      libraryIndexStatus(app.prisma, project.id),
+      embeddingAvailable(app.config.mathcheckUrl),
+    ]);
+    return { ...status, embeddingAvailable: available };
+  });
+
+  /** Rebuild the whole index (re-extracts PDFs for page provenance). */
+  app.post<{ Params: { id: string } }>('/projects/:id/library/reindex', async (request, reply) => {
+    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
+    if (!project) return reply.callNotFound();
+    if (!(await embeddingAvailable(app.config.mathcheckUrl))) {
+      return reply.code(503).send({ error: 'embedding model unavailable in mathcheck — see the runbook (one-time model download)' });
+    }
+    const result = await reindexProject(app.prisma, app.config.mathcheckUrl, project.id, async (storagePath) => {
+      const buf = await readLiteraturePdf(ws(), project.id, storagePath).catch(() => null);
+      if (!buf) return null;
+      const ex = await extractViaMathcheck(app.config.mathcheckUrl, buf.toString('base64'));
+      return ex.text ? { text: ex.text, pageOffsets: ex.pageOffsets } : null;
+    });
+    return result;
   });
 
   app.post<{ Params: { itemId: string } }>('/library/items/:itemId/link', async (request, reply) => {
@@ -425,13 +531,17 @@ export async function libraryRoutes(app: FastifyInstance): Promise<void> {
     const entry = await app.prisma.trashEntry.findUnique({ where: { id: request.params.trashId } });
     if (!entry) return reply.callNotFound();
     const payload = entry.payload as Record<string, unknown>;
+    // Library trash (literature/folder) is always project-scoped; projectId is
+    // nullable only for app-level project-folder trash, handled elsewhere.
+    const projectId = entry.projectId;
+    if (!projectId) return reply.code(400).send({ error: 'Not a library trash entry.' });
 
     if (entry.kind === 'literature') {
       const it = payload as unknown as ItemRow & { storagePath: string };
       await app.prisma.literatureItem.create({
         data: {
           id: it.id,
-          projectId: entry.projectId,
+          projectId,
           folderId: it.folderId,
           title: it.title,
           authors: it.authors,
@@ -455,7 +565,7 @@ export async function libraryRoutes(app: FastifyInstance): Promise<void> {
         for (const f of folders) {
           if (placed.has(f.id)) continue;
           if (f.parentId && folders.some((p) => p.id === f.parentId) && !placed.has(f.parentId)) continue;
-          await app.prisma.folder.create({ data: { id: f.id, projectId: entry.projectId, tree: 'literature', name: f.name, parentId: f.parentId } }).catch(() => undefined);
+          await app.prisma.folder.create({ data: { id: f.id, projectId, tree: 'literature', name: f.name, parentId: f.parentId } }).catch(() => undefined);
           placed.add(f.id);
         }
       }
@@ -464,7 +574,7 @@ export async function libraryRoutes(app: FastifyInstance): Promise<void> {
           .create({
             data: {
               id: it.id,
-              projectId: entry.projectId,
+              projectId,
               folderId: it.folderId,
               title: it.title,
               authors: it.authors,

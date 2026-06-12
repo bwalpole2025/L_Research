@@ -37,6 +37,9 @@
     "pdfjs-dist": "^4.6.82",
     "zod": "^3.23.8"
   },
+  "optionalDependencies": {
+    "keytar": "^7.9.0"
+  },
   "devDependencies": {
     "@types/node": "^20.14.10",
     "dotenv-cli": "^7.4.2",

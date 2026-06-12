@@ -16,6 +16,10 @@ export function buildPopup(f: ReviewFinding, approximate: boolean): string {
   if (f.suggestion) parts.push(`Suggestion: ${f.suggestion}`);
   if (f.counterexample) parts.push(`SymPy counterexample: ${formatCx(f.counterexample)}`);
   if (f.reference) parts.push(`Reference: [${f.reference}]${f.quotedSpan ? ` — "${f.quotedSpan}"` : ''}`);
+  // RAG evidence: the retrieved passage IS the basis of the finding — show it.
+  for (const p of f.retrievedPassages ?? []) {
+    parts.push(`Evidence (${p.sourceTitle ?? p.literatureItemId}, p.${p.page || '?'}, score ${p.score}): “${p.text.slice(0, 280)}”`);
+  }
   if (approximate) parts.push('(approximate location)');
   return parts.join('\n');
 }
@@ -33,12 +37,19 @@ interface AnnotateItem {
   indexLabel: string;
 }
 
+/** Optional overall commentary rendered as its own page(s) in the annotated PDF. */
+export interface AnnotateSummary {
+  title: string;
+  text: string;
+}
+
 /** Send the clean PDF + located findings to mathcheck's PyMuPDF annotator. */
 export async function annotatePdf(
   mathcheckUrl: string,
   pdfBase64: string,
   findings: ReviewFinding[],
   coords: Map<string, FindingCoord>,
+  summary?: AnnotateSummary,
 ): Promise<{ pdfBase64: string; annotations: number } | null> {
   const items: AnnotateItem[] = [];
   for (const f of findings) {
@@ -57,14 +68,16 @@ export async function annotatePdf(
       indexLabel: `${f.severity} · ${f.message.slice(0, 90)}`,
     });
   }
-  if (items.length === 0) return null;
+  // Proceed with zero located findings only when there is a summary to attach —
+  // the feedback page alone is still a useful annotated copy.
+  if (items.length === 0 && !summary?.text?.trim()) return null;
 
   let res: Response;
   try {
     res = await fetch(`${mathcheckUrl}/annotate-pdf`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ pdf_base64: pdfBase64, findings: items }),
+      body: JSON.stringify({ pdf_base64: pdfBase64, findings: items, ...(summary ? { summary } : {}) }),
     });
   } catch {
     return null;

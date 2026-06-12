@@ -1,6 +1,7 @@
 import type { ReviewFinding } from '@latex-studio/shared';
 import { auditMaths, type AuditInputFile } from '../audit/service.js';
 import { checkProse, type ProseInputFile } from '../prose/check.js';
+import { parseProject, type FileInput } from '../thesis/parse.js';
 
 export interface MathsAxisOpts {
   mathcheckUrl: string;
@@ -29,6 +30,23 @@ export async function mathsFindings(files: AuditInputFile[], opts: MathsAxisOpts
     if (b.counterexample) finding.counterexample = b.counterexample;
     return [finding];
   });
+}
+
+/** Axis B1 — structural referencing (deterministic): broken \ref/\eqref/\cref,
+ *  \cite keys absent from the .bib, duplicate labels. Machine-verified (red). */
+export function xrefFindings(allFiles: FileInput[], rootFile: string): ReviewFinding[] {
+  const parsed = parseProject(allFiles, rootFile);
+  return parsed.xref.diagnostics.map((d, i) => ({
+    id: `xref:${d.file}:${d.line}:${d.rule}:${i}`,
+    axis: 'literature' as const,
+    category: `structural:${d.rule}`,
+    severity: d.severity === 'error' ? ('error' as const) : ('info' as const),
+    confidence: 'verified' as const,
+    file: d.file,
+    lineSpan: { fromLine: d.line, toLine: d.line },
+    message: d.message,
+    ...(d.key ? { reference: d.key } : {}),
+  }));
 }
 
 /** Axis 4 (deterministic part) — en-GB spelling only. Reliable; "verified-typo". */

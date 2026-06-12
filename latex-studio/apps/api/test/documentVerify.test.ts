@@ -29,14 +29,19 @@ function recordMathcheck(): { bodies: string[]; restore: () => void } {
   return { bodies, restore: () => void (globalThis.fetch = realFetch) };
 }
 
-/** Mock LLM that, if asked for commentary, echoes the equation ids back with a note. */
+/** Mock LLM that echoes equation ids back with a note + overall feedback. */
 function commentaryProvider(capture: { prompts: string[] }): ModelProvider {
   return {
     async *chatStream(req) {
       const user = req.messages.map((m) => m.content).join('\n');
       capture.prompts.push(user);
       const ids = [...user.matchAll(/\[id ([^\]]+)\]/g)].map((m) => m[1]);
-      yield { text: JSON.stringify(ids.map((id) => ({ id, comment: 'check for a dropped constant term' }))) };
+      yield {
+        text: JSON.stringify({
+          feedback: 'The derivation expands a binomial; the risk concentrates in the constant term. (Commentary, not a verdict.)',
+          comments: ids.map((id) => ({ id, comment: 'check for a dropped constant term' })),
+        }),
+      };
     },
     async complete() {
       return '';
@@ -87,6 +92,10 @@ describe('runDocumentVerification — SymPy is the arbiter, AI is context only',
     const comment = dv.comments.find((c) => c.id === failing[0]!.id);
     expect(comment?.comment).toContain('dropped constant');
     expect(failing[0]!.verdict).toBe('failing'); // the comment cannot change the SymPy verdict
+
+    // Overall mathematical feedback is parsed; no PDF context here → pdfScanned false.
+    expect(dv.feedback).toContain('Commentary, not a verdict');
+    expect(dv.pdfScanned).toBe(false);
   }, 60000);
 
   it('works with no model provider — SymPy verdicts stand, zero AI commentary', async () => {
@@ -158,5 +167,17 @@ describe('POST /projects/:id/coderive intent=verify-document (route + SSE)', () 
     expect(parsed.documentVerification).toBeTruthy();
     expect(parsed.documentVerification!.report.totals.passed).toBeGreaterThanOrEqual(1);
     expect(parsed.documentVerification!.report.totals.failing).toBe(1); // only the chain's wrong step
-  }, 60000);
+    // The route compiles FIRST and scans the compiled PDF.
+    const dv = parsed.documentVerification as unknown as { pdfScanned: boolean; pdfPageCount?: number; verifyPdfUrl?: string };
+    expect(dv.pdfScanned).toBe(true);
+    expect(dv.pdfPageCount).toBeGreaterThanOrEqual(1);
+
+    // An annotated PDF (SymPy verdicts + AI comments + feedback page) is ALWAYS
+    // produced when a PDF exists — and it is servable.
+    expect(dv.verifyPdfUrl).toBeTruthy();
+    const servedPath = dv.verifyPdfUrl!.replace(/\?.*$/, '');
+    const pdf = await app.inject({ method: 'GET', url: servedPath, headers: auth });
+    expect(pdf.statusCode).toBe(200);
+    expect(pdf.headers['content-type']).toBe('application/pdf');
+  }, 120000);
 });

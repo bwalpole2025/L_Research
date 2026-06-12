@@ -28,7 +28,7 @@ export interface DocumentModel {
 
 // Matches a macro definition up to the opening `{` of its body; the body is then read brace-balanced.
 const MACRO_START =
-  /\\(?:re|provide)?newcommand\*?\s*\{?\s*(\\[a-zA-Z]+)\s*\}?(?:\[\d+\])?(?:\[[^\]]*\])?\s*\{|\\DeclareMathOperator\*?\s*\{(\\[a-zA-Z]+)\}\s*\{|\\def\s*(\\[a-zA-Z]+)\s*\{/g;
+  /\\(?:newcommand|renewcommand|providecommand)\*?\s*\{?\s*(\\[a-zA-Z]+)\s*\}?(?:\[\d+\])?(?:\[[^\]]*\])?\s*\{|\\DeclareMathOperator\*?\s*\{(\\[a-zA-Z]+)\}\s*\{|\\def\s*(\\[a-zA-Z]+)\s*\{/g;
 
 function readBraced(s: string, openIndex: number): { body: string; end: number } {
   let depth = 0;

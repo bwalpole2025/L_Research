@@ -66,7 +66,9 @@ export function buildEditPrompt(req: EditRequest): string {
 /** Compose the instruction for a fix-from-log edit (routed through editRegion). */
 export function buildFixInstruction(message: string, line: number | undefined, logExcerpt: string): string {
   return [
-    'This LaTeX region failed to compile. Make the minimal change so it compiles.',
+    'This LaTeX region failed to compile. Make the MINIMAL change so it compiles.',
+    'Fix ONLY the error in scope — do not rewrite, reformat, or "improve" surrounding maths or prose in any way.',
+    'If you cannot produce a confident minimal fix, output exactly <replacement>NO_FIX</replacement> instead of guessing.',
     `Compiler error${line ? ` (line ${line})` : ''}: ${message}`,
     'Compiler log excerpt:',
     logExcerpt,

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ChevronDown,
   ChevronRight,
@@ -10,6 +10,7 @@ import {
   FolderClosed,
   FolderOpen,
   FolderPlus,
+  FolderUp,
   Pencil,
   Trash2,
   Upload,
@@ -19,6 +20,7 @@ import { useEditorStore } from '@/lib/store';
 import { useThesisStore } from '@/lib/thesisStore';
 import { ApiError } from '@/lib/api';
 import { ALL_EXTENSIONS, isBinaryPath } from '@/lib/fileKind';
+import { itemsFromDataTransfer, itemsFromFileList } from '@/lib/dropUpload';
 import { basename, buildTree, parentPath, type TreeNode } from '@/lib/treeUtils';
 
 function reportError(err: unknown): void {
@@ -55,6 +57,7 @@ export function FileTree() {
   const uploadFiles = useEditorStore((s) => s.uploadFiles);
   const unverifiedByFile = useThesisStore((s) => s.auditReport?.byFile ?? {});
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
   const uploadDirRef = useRef<string>('');
 
   const triggerUpload = useCallback((dir: string) => {
@@ -62,17 +65,55 @@ export function FileTree() {
     fileInputRef.current?.click();
   }, []);
 
-  const onUploadChange = useCallback(
-    async (e: React.ChangeEvent<HTMLInputElement>) => {
-      const picked = Array.from(e.target.files ?? []);
-      e.target.value = ''; // allow re-selecting the same file
-      if (picked.length === 0) return;
-      const { uploaded, errors } = await uploadFiles(picked, uploadDirRef.current);
-      if (errors.length > 0) {
-        window.alert(`Uploaded ${uploaded} file(s).\n\nSkipped:\n${errors.join('\n')}`);
+  const triggerFolderUpload = useCallback((dir: string) => {
+    uploadDirRef.current = dir;
+    folderInputRef.current?.click();
+  }, []);
+
+  const runUpload = useCallback(
+    async (items: { file: File; relativePath: string }[], dir: string) => {
+      if (items.length === 0) return;
+      const { uploaded, skipped, errors } = await uploadFiles(items, dir);
+      const notes: string[] = [];
+      if (skipped > 0) notes.push(`${skipped} unsupported file(s) skipped.`);
+      if (errors.length > 0) notes.push(`Errors:\n${errors.join('\n')}`);
+      if (notes.length > 0) {
+        window.alert(`Uploaded ${uploaded} file(s).\n\n${notes.join('\n\n')}`);
       }
     },
     [uploadFiles],
+  );
+
+  const onUploadChange = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const items = itemsFromFileList(e.target.files);
+      e.target.value = ''; // allow re-selecting the same file/folder
+      await runUpload(items, uploadDirRef.current);
+    },
+    [runUpload],
+  );
+
+  // Drag a file or folder from the OS straight onto the tree (or a folder row).
+  // `dropTarget` is the directory the drop would land in ('' = project root);
+  // null means nothing is being dragged over.
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
+  const onDragOverInto = useCallback((e: React.DragEvent, dir: string) => {
+    if (e.dataTransfer.types.includes('Files')) {
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = 'copy';
+      setDropTarget(dir);
+    }
+  }, []);
+  const onDropInto = useCallback(
+    async (e: React.DragEvent, dir: string) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setDropTarget(null);
+      const items = await itemsFromDataTransfer(e.dataTransfer);
+      await runUpload(items, dir);
+    },
+    [runUpload],
   );
   const openFile = useEditorStore((s) => s.openFile);
   const createFile = useEditorStore((s) => s.createFile);
@@ -81,6 +122,15 @@ export function FileTree() {
   const renameFolder = useEditorStore((s) => s.renameFolder);
   const deleteFile = useEditorStore((s) => s.deleteFile);
   const deleteFolder = useEditorStore((s) => s.deleteFolder);
+
+  // `webkitdirectory`/`directory` aren't in React's input typings — set them on
+  // the DOM node directly so folder selection works without an unsafe cast.
+  useEffect(() => {
+    const el = folderInputRef.current;
+    if (!el) return;
+    el.setAttribute('webkitdirectory', '');
+    el.setAttribute('directory', '');
+  }, []);
 
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const tree = buildTree(files, folders);
@@ -164,8 +214,12 @@ export function FileTree() {
         return (
           <div key={`d:${node.path}`}>
             <div
-              className="group mx-1 flex h-7 items-center gap-1 rounded-md pr-2 text-[13px] font-medium text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-950 dark:text-zinc-300 dark:hover:bg-zinc-900 dark:hover:text-zinc-50"
+              className={`group mx-1 flex h-7 items-center gap-1 rounded-md pr-2 text-[13px] font-medium text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-950 dark:text-zinc-300 dark:hover:bg-zinc-900 dark:hover:text-zinc-50 ${
+                dropTarget === node.path ? 'bg-blue-100 ring-1 ring-inset ring-blue-400 dark:bg-blue-500/20 dark:ring-blue-500' : ''
+              }`}
               style={pad}
+              onDragOver={(e) => onDragOverInto(e, node.path)}
+              onDrop={(e) => void onDropInto(e, node.path)}
             >
               <button
                 type="button"
@@ -188,7 +242,8 @@ export function FileTree() {
               </span>
               <div className="hidden items-center group-hover:flex">
                 <IconButton icon={FilePlus} label="New file" onClick={() => void newFile(node.path)} />
-                <IconButton icon={Upload} label="Upload here" onClick={() => triggerUpload(node.path)} />
+                <IconButton icon={Upload} label="Upload files here" onClick={() => triggerUpload(node.path)} />
+                <IconButton icon={FolderUp} label="Upload folder here" onClick={() => triggerFolderUpload(node.path)} />
                 <IconButton icon={FolderPlus} label="New folder" onClick={() => newFolder(node.path)} />
                 <IconButton icon={Pencil} label="Rename folder" onClick={() => void doRenameFolder(node.path)} />
                 <IconButton icon={Trash2} label="Delete folder" onClick={() => void doDeleteFolder(node.path)} />
@@ -240,12 +295,23 @@ export function FileTree() {
     });
 
   return (
-    <div className="flex h-full flex-col bg-[var(--ls-surface)]">
+    <div
+      className={`relative flex h-full flex-col bg-[var(--ls-surface)] ${
+        dropTarget === '' ? 'ring-2 ring-inset ring-blue-400 dark:ring-blue-500' : ''
+      }`}
+      onDragOver={(e) => onDragOverInto(e, '')}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropTarget(null);
+      }}
+      onDrop={(e) => void onDropInto(e, '')}
+      data-testid="file-tree-root"
+    >
       <div className="flex h-10 items-center justify-between border-b border-zinc-200 bg-[var(--ls-surface-muted)] px-3 text-xs font-semibold text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
         <span>Files</span>
         <div className="flex items-center gap-0.5">
           <IconButton icon={FilePlus} label="New file" onClick={() => void newFile('')} />
           <IconButton icon={Upload} label="Upload files" onClick={() => triggerUpload('')} />
+          <IconButton icon={FolderUp} label="Upload folder" onClick={() => triggerFolderUpload('')} />
           <IconButton icon={FolderPlus} label="New folder" onClick={() => newFolder('')} />
         </div>
       </div>
@@ -255,6 +321,14 @@ export function FileTree() {
         multiple
         accept={ALL_EXTENSIONS.join(',')}
         data-testid="file-upload-input"
+        className="hidden"
+        onChange={(e) => void onUploadChange(e)}
+      />
+      <input
+        ref={folderInputRef}
+        type="file"
+        multiple
+        data-testid="folder-upload-input"
         className="hidden"
         onChange={(e) => void onUploadChange(e)}
       />

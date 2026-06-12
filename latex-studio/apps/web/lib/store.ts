@@ -14,7 +14,7 @@ import {
 } from './persist';
 import { editorController } from './editorController';
 import { parentPath } from './treeUtils';
-import { fileToBase64, isAllowedPath, isBinaryPath, sanitiseSegment } from './fileKind';
+import { fileToBase64, isAllowedPath, isBinaryPath, uploadTargetPath, type UploadItem } from './fileKind';
 import type {
   CompileResultStatus,
   CursorState,
@@ -101,6 +101,8 @@ interface EditorState {
   diagnostics: Diagnostic[];
   compileStatus: CompileResultStatus | null;
   compileDurationMs: number | null;
+  /** Tail of the raw .log from the last compile (panel "raw log" view). */
+  compileLog: string | null;
   compileError: string | null;
   pdfUrl: string | null;
   compileOnSave: boolean;
@@ -114,6 +116,8 @@ interface EditorState {
   assumptions: string;
   model: string;
   aiInstructions: string;
+  /** Model connector powering AI: "anthropic" | "chatgpt" | "gemini". */
+  aiProvider: string;
   mathResult: DerivationResult | null;
   mathChecking: boolean;
   mathError: string | null;
@@ -137,7 +141,10 @@ interface EditorState {
   setContent: (id: string, content: string) => void;
   setCursor: (id: string, cursor: CursorState) => void;
   createFile: (path: string, content?: string, encoding?: 'utf8' | 'base64') => Promise<FileMeta | null>;
-  uploadFiles: (files: File[], parentDir: string) => Promise<{ uploaded: number; errors: string[] }>;
+  uploadFiles: (
+    items: UploadItem[],
+    parentDir: string,
+  ) => Promise<{ uploaded: number; skipped: number; errors: string[] }>;
   renameFile: (id: string, newPath: string) => Promise<void>;
   deleteFile: (id: string) => Promise<void>;
   createFolder: (path: string) => void;
@@ -163,6 +170,8 @@ interface EditorState {
     assumptions?: string;
     model?: string;
     aiInstructions?: string;
+    aiProvider?: string;
+    rootFile?: string;
   }) => Promise<void>;
   checkDerivation: () => Promise<void>;
   clearMath: () => void;
@@ -248,6 +257,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
     diagnostics: [],
     compileStatus: null,
     compileDurationMs: null,
+    compileLog: null,
     compileError: null,
     pdfUrl: null,
     compileOnSave: false,
@@ -257,6 +267,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
     assumptions: '',
     model: 'claude-sonnet-4-6',
     aiInstructions: '',
+    aiProvider: 'anthropic',
     mathResult: null,
     mathChecking: false,
     mathError: null,
@@ -302,6 +313,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
         diagnostics: [],
         compileStatus: null,
         compileDurationMs: null,
+        compileLog: null,
         compileError: null,
         pdfUrl: null,
         pendingReveal: null,
@@ -320,6 +332,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
         assumptions: settingsSource?.assumptions ?? '',
         model: settingsSource?.model ?? 'claude-sonnet-4-6',
         aiInstructions: settingsSource?.aiInstructions ?? '',
+        aiProvider: settingsSource?.aiProvider ?? 'anthropic',
       });
 
       await get().refreshFiles();
@@ -411,24 +424,27 @@ export const useEditorStore = create<EditorState>((set, get) => {
       return { id: file.id, projectId: file.projectId, path: file.path, encoding: file.encoding, updatedAt: file.updatedAt };
     },
 
-    async uploadFiles(files, parentDir) {
+    async uploadFiles(items, parentDir) {
       const { projectId } = get();
-      if (!projectId) return { uploaded: 0, errors: ['no project'] };
-      const dir = parentDir.replace(/\/+$/, '');
+      if (!projectId) return { uploaded: 0, skipped: 0, errors: ['no project'] };
       const errors: string[] = [];
       let uploaded = 0;
+      let skipped = 0; // unsupported types — common in folder uploads (.DS_Store, .aux, …)
       let firstId: string | null = null;
 
-      for (const file of files) {
-        if (!isAllowedPath(file.name)) {
-          errors.push(`${file.name}: unsupported file type`);
+      for (const { file, relativePath } of items) {
+        // relativePath preserves folder structure: "thesis/ch1/fig.png" from a
+        // folder upload or a folder drag-drop; just "fig.png" for a plain file.
+        const relative = relativePath || file.name;
+        if (!isAllowedPath(relative)) {
+          skipped += 1;
           continue;
         }
         if (file.size > MAX_UPLOAD_BYTES) {
-          errors.push(`${file.name}: too large (max ${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)} MB)`);
+          errors.push(`${relative}: too large (max ${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)} MB)`);
           continue;
         }
-        const path = (dir ? `${dir}/` : '') + sanitiseSegment(file.name);
+        const path = uploadTargetPath(parentDir, relative);
         try {
           const created = isBinaryPath(path)
             ? await api.createFile(projectId, path, await fileToBase64(file), 'base64')
@@ -436,13 +452,13 @@ export const useEditorStore = create<EditorState>((set, get) => {
           uploaded += 1;
           firstId ??= created.id;
         } catch (err) {
-          errors.push(`${file.name}: ${err instanceof ApiError ? err.message : 'upload failed'}`);
+          errors.push(`${relative}: ${err instanceof ApiError ? err.message : 'upload failed'}`);
         }
       }
 
       if (uploaded > 0) await get().refreshFiles();
       if (firstId) await get().openFile(firstId);
-      return { uploaded, errors };
+      return { uploaded, skipped, errors };
     },
 
     async renameFile(id, newPath) {
@@ -573,6 +589,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
           diagnostics: res.diagnostics,
           compileStatus: res.status,
           compileDurationMs: res.durationMs,
+          compileLog: res.log ?? null,
           pdfUrl: res.pdfUrl ? `/api${res.pdfUrl}` : get().pdfUrl,
         });
       } catch (err) {
@@ -658,6 +675,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
         assumptions: updated.assumptions ?? '',
         model: updated.model ?? 'claude-sonnet-4-6',
         aiInstructions: updated.aiInstructions ?? '',
+        aiProvider: updated.aiProvider ?? 'anthropic',
         projects: s.projects.map((p) =>
           p.id === projectId
             ? {
@@ -666,6 +684,8 @@ export const useEditorStore = create<EditorState>((set, get) => {
                 assumptions: updated.assumptions ?? '',
                 model: updated.model ?? 'claude-sonnet-4-6',
                 aiInstructions: updated.aiInstructions ?? '',
+                aiProvider: updated.aiProvider ?? 'anthropic',
+                rootFile: updated.rootFile,
               }
             : p,
         ),

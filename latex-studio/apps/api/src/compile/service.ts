@@ -39,6 +39,30 @@ export class CompileService {
     return this.runner.artifactPath(projectId, `${this.base(rootFile)}.pdf`);
   }
 
+  /** Host path of the project's working directory (snippet cache lives under it). */
+  projectDir(projectId: string): string {
+    return this.runner.projectDir(projectId);
+  }
+
+  /** Stage ONE auxiliary file (e.g. a standalone snippet) into the workspace. */
+  async writeSnippet(projectId: string, relPath: string, content: string): Promise<void> {
+    await this.runner.writeFiles(projectId, [{ path: relPath, content }]);
+  }
+
+  /** Stage the project's files into the workspace — snippets \usepackage the
+   *  project's own .sty files, which must exist on disk even if the project
+   *  has never been compiled. */
+  async stageFiles(projectId: string, files: ProjectFileInput[]): Promise<void> {
+    await this.runner.writeFiles(projectId, files);
+  }
+
+  /** Compile a tiny standalone snippet OUTSIDE the per-project queue (snippets
+   *  are independent of document compiles and finish in ~1s). */
+  async compileSnippet(projectId: string, rootFile: string): Promise<{ ok: boolean; logTail: string }> {
+    const result = await this.runner.latexmk(projectId, rootFile);
+    return { ok: result.code === 0 && !result.timedOut, logTail: (result.stdout + result.stderr).slice(-6000) };
+  }
+
   synctexPath(projectId: string, rootFile: string): string {
     return this.runner.artifactPath(projectId, `${this.base(rootFile)}.synctex.gz`);
   }

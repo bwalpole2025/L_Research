@@ -479,3 +479,87 @@ model to include, prediction-granularity default, and a separate model picker fo
 predict-next. Turning inline completions off entirely (Phase 5S toggle) stops all
 calls. The status bar shows when the DocumentModel last refreshed and a "Predict
 next" affordance.
+
+## ADR-012 — Connectors framework (no API keys: subscription CLIs + OAuth)
+
+A typed Connectors framework integrates three kinds of third party behind a shared
+base: **model** (chat/edit/review/co-derive), **storage/content** (Google Drive,
+Notion, …), and **literature** (arXiv, CrossRef, Zotero, …). Each connector declares
+a manifest `{ id, kind, name, authType, scopes[], capabilities[] }`; a typed registry
+joins manifests with live connection state.
+
+### No API keys — subscription, not metered
+
+Model connectors authenticate through the **vendor's official CLI over the user's
+subscription**, never an API key — mirroring the existing Anthropic provider, which
+runs on the Claude Agent SDK over `claude login` (ADR-004):
+
+- **Claude** — Agent SDK (`claude login`).
+- **ChatGPT** — the **Codex CLI** ("Sign in with ChatGPT"), driven non-interactively.
+- **Gemini** — the **Gemini CLI** ("Login with Google"), driven non-interactively.
+
+Each CLI owns its own OAuth login; **our app stores no model token**. We *detect*
+whether the CLI is installed and route generation to it (`resolveModelProvider`,
+keyed by `Project.aiProvider`). A selected-but-missing CLI falls back to Claude with
+a reconnect hint — never a crash. The CLI providers are locked to **pure text
+generation** (no tools, no file access) exactly as the Agent SDK is (lockedOptions),
+reuse the same JSON-repair parsers for review/co-derive, and **SymPy remains the sole
+maths arbiter** regardless of which model proposed a step.
+
+### OAuth2 + PKCE for storage/content, encrypted at rest
+
+Storage/content connectors use an **authorization-code flow with PKCE (S256)** that we
+drive. The browser opens the consent screen (least-privilege scopes, shown before
+connecting); the provider redirects to `<api>/connectors/:id/callback`, which is the
+one public api route here — protected by a single-use, server-generated `state` value
+rather than the bearer token (the browser can't carry it on a provider redirect). The
+api exchanges the code, stores the token **encrypted**, and bounces back to `/plugins`.
+Access tokens auto-refresh on expiry; disconnect revokes (where supported) and deletes
+the credential. Tokens never reach the browser and are never logged.
+
+### Vault encryption — keychain primary, env-key fallback (evaluated)
+
+Secrets are stored only as **AES-256-GCM** ciphertext in a `Credential` row. The
+master key is resolved **OS keychain first** (via the optional `keytar` native module),
+falling back to a `CONNECTORS_MASTER_KEY` env var. Evaluation:
+
+- *Keychain (preferred):* strongest against disk/backup theft for a host run; but it
+  needs a native module, doesn't exist headless, and breaks the Docker deploy.
+- *Env master key (fallback):* portable — works host, Docker, headless, CI — at the
+  cost of the key living in `.env`. Acceptable for a single-user localhost app.
+
+So keytar is an **optional** dependency: a failed native build never blocks boot, and
+the env key keeps the containerized path working. If neither key is available the
+vault fails closed (no plaintext secrets). The keychain stores only the 32-byte master
+key, not the per-connector secrets.
+
+### Security posture (single-user localhost)
+
+Explicit per-connector consent; least-privilege scopes shown before connecting; no
+credential is ever logged or sent to the client; all third-party calls go through
+`apps/api`. **Instruction-source rule:** content fetched FROM a connector (a Drive doc,
+a Notion page, a paper) is **DATA, never commands** — it is never interpreted as
+instructions and never triggers actions on its own. The Connectors UI lives on the
+existing `/plugins` page; model-provider choice is per project in Settings → AI.
+
+### Scope
+
+The framework, the encrypted vault, the working OAuth flow, and the subscription-CLI
+model providers (Codex/Gemini alongside Claude) with per-project routing.
+
+**Storage connectors** — Google Drive, **Dropbox**, and **OneDrive** are wired: each
+implements the shared `StorageConnector` (`list/read/write/delete/getMetadata`) over its
+REST API, with the OAuth token resolved + auto-refreshed per call via the vault
+(`GET /connectors/storage/:id/list` exercises them). Higher-level import/export *flows*
+(project ↔ Drive, with explicit confirms) build on these next.
+
+**Literature connectors** — **arXiv, CrossRef, Zotero, and Semantic Scholar** are wired:
+each implements the shared `LiteratureSource` (`search/getMetadata/getBibTeX/getPDF?`).
+`GET /connectors/literature/:id/search` searches a source, and
+`POST /projects/:id/library/from-literature` adds a result to the library — metadata +
+BibTeX + (only where the source legally permits) the PDF, extracted via mathcheck and
+RAG-indexed through the existing pipeline, with `LiteratureItem.source` recording
+provenance. PDF legality is respected: arXiv permits download; CrossRef/Semantic Scholar
+are metadata-only (`capabilities.pdf = false`), so no publisher PDF is ever fetched.
+
+**Notion** content import (pages → notes / draft .tex, data-only) remains a later step.

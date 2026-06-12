@@ -54,10 +54,11 @@ async function mockApi(page: Page) {
 
 test('SymPy verdicts gate insertion; counterexample + attribution + provenance are surfaced', async ({ page }) => {
   await mockApi(page);
-  await page.goto('/');
+  await page.goto('/studio');
   await expect(page.locator('.cm-content')).toBeVisible();
   await page.locator('.cm-content').click(); // give the editor a cursor
 
+  await page.getByTestId('tools-menu').click();
   await page.getByTestId('coderive').click();
   await page.getByTestId('intent-next-step').click();
   await page.getByTestId('coderive-run').click();
@@ -100,8 +101,8 @@ const DOCVERIFY = {
   documentVerification: {
     report: {
       blocks: [
-        { id: 'main.tex:3:aaa', file: 'main.tex', lineStart: 3, lineEnd: 3, verdict: 'passed', method: 'simplify', latex: '(x+1)^2 = x^2 + 2x + 1' },
-        { id: 'main.tex:7:bbb', file: 'main.tex', lineStart: 7, lineEnd: 7, verdict: 'failing', method: 'sample', latex: '(x+1)^2 = x^2 + 2x + 2', counterexample: { values: { x: 1 }, lhsVal: 4, rhsVal: 5 } },
+        { id: 'main.tex:3:aaa', file: 'main.tex', lineStart: 3, lineEnd: 3, verdict: 'passed', method: 'simplify', latex: '(x+1)^2 = x^2 + 2x + 1', pdfPage: 1 },
+        { id: 'main.tex:7:bbb', file: 'main.tex', lineStart: 7, lineEnd: 7, verdict: 'failing', method: 'sample', latex: '(x+1)^2 = x^2 + 2x + 2', counterexample: { values: { x: 1 }, lhsVal: 4, rhsVal: 5 }, pdfPage: 2 },
       ],
       totals: { failing: 1, unknown: 0, passed: 1, checked: 2, cached: 0 },
       byFile: { 'main.tex': 1 },
@@ -109,6 +110,10 @@ const DOCVERIFY = {
     comments: [{ id: 'main.tex:7:bbb', comment: 'check for a dropped constant term' }],
     commentaryProvided: true,
     commentedCount: 1,
+    feedback: 'The derivation expands a binomial; the mathematical risk concentrates in the constant term.',
+    pdfScanned: true,
+    pdfPageCount: 3,
+    verifyPdfUrl: '/projects/p1/review-pdf?rev=1',
   },
 };
 
@@ -135,9 +140,10 @@ async function mockApiDocVerify(page: Page) {
 
 test('verify-document shows SymPy verdicts + AI context with NO insert affordance', async ({ page }) => {
   await mockApiDocVerify(page);
-  await page.goto('/');
+  await page.goto('/studio');
   await expect(page.locator('.cm-content')).toBeVisible();
 
+  await page.getByTestId('tools-menu').click();
   await page.getByTestId('coderive').click();
   await page.getByTestId('intent-verify-document').click();
   await page.getByTestId('coderive-run').click();
@@ -150,17 +156,29 @@ test('verify-document shows SymPy verdicts + AI context with NO insert affordanc
   await expect(view).toContainText('1 ✓');
   await expect(view).toContainText('1 ✗');
 
-  // The failing equation is surfaced with its location, counterexample, and AI context.
+  // The compiled PDF was scanned, and the AI's mathematical feedback is shown as commentary.
+  await expect(page.getByTestId('docverify-pdf-status')).toContainText('compiled PDF scanned (3 pages)');
+  await expect(page.getByTestId('docverify-feedback')).toContainText('Mathematical feedback (AI commentary — not a verdict)');
+  await expect(page.getByTestId('docverify-feedback')).toContainText('risk concentrates in the constant term');
+
+  // The failing equation is surfaced with its location, PDF page, counterexample, and AI context.
   const finding = page.getByTestId('docverify-finding');
   await expect(finding).toHaveCount(1); // only the non-passing one is listed
   await expect(finding).toContainText('✗ SymPy');
   await expect(finding).toContainText('main.tex:7');
+  await expect(finding).toContainText('PDF p.2');
   await expect(finding).toContainText('SymPy counterexample');
   await expect(finding).toContainText('AI context (not a verdict):');
   await expect(finding).toContainText('dropped constant term');
 
-  // CRITICAL: findings about existing algebra are NOT insertable — no buttons at all.
-  await expect(view.getByRole('button')).toHaveCount(0);
+  // CRITICAL: findings about existing algebra are NOT insertable — the only button
+  // in the view opens the annotated PDF; there is no insert affordance anywhere.
+  await expect(view.getByRole('button')).toHaveCount(1);
+  await expect(page.getByTestId('open-annotated-pdf')).toBeVisible();
   await expect(page.getByText('Insert anyway (unverified)')).toHaveCount(0);
   await expect(page.getByText('Insert (diff)')).toHaveCount(0);
+
+  // Opening the annotated PDF switches the PDF pane to the annotated copy.
+  await page.getByTestId('open-annotated-pdf').click();
+  await expect(page.getByTestId('pdf-review')).toBeVisible();
 });

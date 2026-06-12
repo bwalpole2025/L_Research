@@ -31,6 +31,8 @@ export interface Project {
   createdAt: string;
   /** ISO-8601 timestamp. */
   updatedAt: string;
+  /** App-level Home folder organising this project; null = root ("Unfiled"). */
+  folderId?: string | null;
   /** Mathcheck macro table: `{ "\\Bo": "B_0", "\\pdiff": "..." }`. */
   macros?: Record<string, string>;
   /** Mathcheck default assumptions, e.g. "all symbols real, k > 0". */
@@ -39,6 +41,23 @@ export interface Project {
   model?: string;
   /** Project-specific AI instructions, injected into the chat system prompt. */
   aiInstructions?: string;
+  /** Model connector powering AI: "anthropic" | "chatgpt" | "gemini". */
+  aiProvider?: string;
+}
+
+/**
+ * App-level folder that ORGANISES projects on Home (the file-explorer). Groups
+ * projects only — no projectId, never touches a project's internal files/paths.
+ */
+export interface ProjectFolder {
+  id: string;
+  parentId: string | null;
+  name: string;
+  createdAt: string;
+}
+
+export interface ProjectFoldersResponse {
+  folders: ProjectFolder[];
 }
 
 export interface TexFile {
@@ -67,15 +86,24 @@ export interface Snapshot {
 
 export type CompileStatus = 'success' | 'error';
 
-export type DiagnosticSeverity = 'error' | 'warning' | 'info';
+/** Overleaf-style tiers: red / orange / yellow / grey (see severityTable.ts). */
+export type DiagnosticSeverity = 'error' | 'warning-important' | 'warning-minor' | 'info';
 
 export interface Diagnostic {
   severity: DiagnosticSeverity;
+  /** Stable key from the severity table, e.g. "undefined-reference". */
+  category?: string;
   message: string;
   /** Project-relative file the diagnostic points at, when known. */
   file?: string;
   line?: number;
   column?: number;
+  /** The raw log block backing this diagnostic (for the panel expander). */
+  rawExcerpt?: string;
+  /** A rerun (not an edit) would likely resolve this — offer one-click recompile. */
+  rerunHint?: boolean;
+  /** For grouped entries (box warnings): number of raw occurrences collapsed. */
+  count?: number;
 }
 
 export interface CompileResult {
@@ -477,6 +505,8 @@ export interface FixFromLogRequest {
 /** Response from /edit and /fix: a parsed replacement for the region. */
 export interface ReplacementResponse {
   replacement: string;
+  /** Fixes only: the model declined to guess (no confident minimal fix) — no diff is shown. */
+  noFix?: boolean;
 }
 
 // ─── Inline completions (ghost text) ─────────────────────────────────────────
@@ -602,6 +632,8 @@ export interface MathAuditBlock {
   latex: string;
   message?: string;
   cached?: boolean;
+  /** 1-based page of this equation in the compiled PDF (SyncTeX), when located. */
+  pdfPage?: number;
 }
 
 export interface MathAuditReport {
@@ -846,7 +878,7 @@ export interface LibraryTreeResponse {
 
 export interface TrashItem {
   id: string;
-  kind: 'file' | 'folder' | 'literature';
+  kind: 'file' | 'folder' | 'literature' | 'project-folder';
   label: string;
   deletedAt: string;
 }
@@ -913,6 +945,14 @@ export interface DocumentVerification {
   commentaryProvided: boolean;
   /** How many equations were sent for AI commentary (bounded). */
   commentedCount: number;
+  /** AI mathematical feedback on the document's derivations — commentary grounded in
+   *  the SymPy report and the COMPILED PDF's rendered text. Never a verdict. */
+  feedback?: string;
+  /** True when the freshly compiled PDF was extracted and read for this check. */
+  pdfScanned: boolean;
+  pdfPageCount?: number;
+  /** URL of the annotated PDF (failing equations highlighted), when one was written. */
+  verifyPdfUrl?: string;
 }
 
 // ─── Document Review (compose the engines → annotated review PDF) ─────────────
@@ -930,7 +970,27 @@ export type ReviewConfidence =
   | 'llm-judgement'
   | 'llm-judgement-low'
   | 'verified-typo'
-  | 'llm-suggestion';
+  | 'llm-suggestion'
+  /** RAG: the LLM judged a claim AGAINST a retrieved library passage (evidence attached). */
+  | 'rag-contradiction'
+  /** RAG: the retrieved passage supports the claim (info; evidence attached). */
+  | 'rag-supported'
+  /** RAG: nothing relevant in the library — NOT an error, and never implies correctness. */
+  | 'no-library-source'
+  /** Citation-content: the cited source's text is not retrievable — never a contradiction. */
+  | 'attribution-unverified';
+
+/** A passage retrieved from the local library index — the EVIDENCE for a RAG finding. */
+export interface RetrievedPassage {
+  literatureItemId: string;
+  /** 1-based page in the source PDF (0 = unknown). */
+  page: number;
+  text: string;
+  /** Cosine similarity (0–1). */
+  score: number;
+  /** Source label for display ("Basset 1888 — Treatise…"). */
+  sourceTitle?: string;
+}
 
 export type ReviewSeverity = 'error' | 'warning' | 'info';
 
@@ -949,6 +1009,10 @@ export interface ReviewFinding {
   reference?: string;
   /** The reference span quoted/checked (literature axis). */
   quotedSpan?: string;
+  /** REQUIRED for rag-contradiction / rag-supported findings — the retrieved
+   *  evidence (passage + source + page + score). A RAG discrepancy with no
+   *  passages cannot be emitted (structurally enforced + asserted in tests). */
+  retrievedPassages?: RetrievedPassage[];
 }
 
 export interface ReviewRequest {
@@ -994,6 +1058,18 @@ export interface ReviewStyle {
 //  · wrong statement (literature/background/prose LLM) → light yellow
 //  · wrong grammar/spelling (deterministic en-GB) → red (drawn as an underline)
 export function reviewStyle(axis: ReviewAxis, confidence: ReviewConfidence): ReviewStyle {
+  // RAG tiers first (axis-independent): evidence-backed orange; honest grey notes.
+  if (confidence === 'rag-contradiction')
+    return { colour: 'orange', hex: '#f97316', rgb: [0.98, 0.45, 0.09], label: 'Contradicts a retrieved library passage — strong, but confirm against the source', machineVerified: false };
+  if (confidence === 'rag-supported')
+    return { colour: 'soft green', hex: '#bbf7d0', rgb: [0.73, 0.97, 0.82], label: 'Supported by a retrieved library passage (info)', machineVerified: false };
+  if (confidence === 'no-library-source')
+    return { colour: 'grey', hex: '#9ca3af', rgb: [0.61, 0.64, 0.69], label: 'No source in the library — not an error, and not a pass', machineVerified: false };
+  if (confidence === 'attribution-unverified')
+    return { colour: 'grey', hex: '#9ca3af', rgb: [0.61, 0.64, 0.69], label: 'Attribution unverified — cited source not retrievable; never a contradiction', machineVerified: false };
+
+  if (axis === 'literature' && confidence === 'verified')
+    return { colour: 'red', hex: '#ef4444', rgb: [0.94, 0.27, 0.27], label: 'Deterministic cross-reference error (broken \\ref/\\cite, duplicate label)', machineVerified: true };
   if (axis === 'maths' && confidence === 'refuted')
     return { colour: 'light green', hex: '#86efac', rgb: [0.53, 0.94, 0.67], label: 'SymPy-verified algebra error', machineVerified: true };
   if (axis === 'maths')
@@ -1005,4 +1081,180 @@ export function reviewStyle(axis: ReviewAxis, confidence: ReviewConfidence): Rev
   if (axis === 'background')
     return { colour: 'light yellow', hex: '#fde68a', rgb: [0.99, 0.9, 0.54], label: 'LLM judgement, low confidence — verify against a real source', machineVerified: false };
   return { colour: 'light yellow', hex: '#fde68a', rgb: [0.99, 0.9, 0.54], label: 'LLM prose suggestion — may be wrong', machineVerified: false };
+}
+
+// ── Adaptive autocomplete usage scoring ──────────────────────────────────────
+// Frequency + recency, local and deterministic. Each accept contributes
+// 0.5^(ageDays / USAGE_HALFLIFE_DAYS) to an item's score, so a month-old accept
+// is worth half of one made today. Rather than storing every event we keep the
+// running sum AT lastUsedAt and decay it lazily:
+//   stored score s at time t  ≡  Σ over accepts of 0.5^((t - acceptTime)/HL)
+//   effective score at now    =  s · 0.5^((now - t)/HL)
+//   on accept at now          :  s ← effective + 1,  t ← now
+// Frequent-and-recent beats frequent-but-stale beats rare.
+
+export const USAGE_HALFLIFE_DAYS = 30;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+export interface UsageStatRow {
+  key: string;
+  count: number;
+  score: number;
+  firstUsedAt: string;
+  lastUsedAt: string;
+}
+
+export type UsageScope = 'app' | 'project';
+
+export interface UsageEvent {
+  key: string;
+  scope: UsageScope;
+  /** Event time (ISO). Injectable for tests; defaults to now at the recording site. */
+  at: string;
+}
+
+/** The stored score decayed from `lastUsedAt` to `now`. */
+export function decayedUsageScore(score: number, lastUsedAt: string | Date, now: number): number {
+  const last = typeof lastUsedAt === 'string' ? Date.parse(lastUsedAt) : lastUsedAt.getTime();
+  const ageDays = Math.max(0, now - last) / DAY_MS;
+  return score * Math.pow(0.5, ageDays / USAGE_HALFLIFE_DAYS);
+}
+
+/** Fold one accept into a (score, lastUsedAt) pair. */
+export function bumpUsageScore(score: number, lastUsedAt: string | Date, at: number): { score: number; lastUsedAt: string } {
+  return { score: decayedUsageScore(score, lastUsedAt, at) + 1, lastUsedAt: new Date(at).toISOString() };
+}
+
+// ─── Connectors framework ────────────────────────────────────────────────────
+//
+// A connector is a typed integration with a third party. Three KINDS:
+//   model       — drives chat/edit/review/co-derive (via a subscription CLI; NO API key)
+//   storage     — a remote file store (Google Drive, Dropbox, …) via OAuth2
+//   literature  — a paper source (arXiv, CrossRef, Zotero, …)
+// Credentials are sensitive: OAuth tokens are encrypted at rest server-side and
+// NEVER sent to the browser. Model connectors store nothing here — the vendor CLI
+// owns its own subscription login. Content fetched from a connector is DATA, never
+// commands (instruction-source rule).
+
+export type ConnectorKind = 'model' | 'storage' | 'literature';
+
+/**
+ * How a connector authenticates:
+ *  - oauth2          we drive an OAuth2 + PKCE flow and store the token encrypted
+ *  - subscriptionCli the vendor's official CLI owns the login (Claude/Codex/Gemini) — no key
+ *  - apiKey          a user-supplied key, stored encrypted (e.g. Zotero)
+ *  - none            open/no-auth (e.g. arXiv, CrossRef)
+ */
+export type ConnectorAuthType = 'oauth2' | 'subscriptionCli' | 'apiKey' | 'none';
+
+/** A model connector's underlying provider. */
+export type ModelConnectorId = 'anthropic' | 'chatgpt' | 'gemini';
+
+/** Static declaration of a connector (no secrets). */
+export interface ConnectorManifest {
+  id: string;
+  kind: ConnectorKind;
+  name: string;
+  authType: ConnectorAuthType;
+  /** Least-privilege scopes requested, shown to the user before connecting. */
+  scopes: string[];
+  /** Capability flags advertised by this connector (kind-specific vocabulary). */
+  capabilities: string[];
+  /** One-line description for the Connectors UI. */
+  description: string;
+  /** For subscriptionCli connectors: the CLI command + how to sign in. */
+  cli?: { command: string; signInHint: string; installHint: string };
+  /** True once a real adapter is wired; false = listed-but-scaffolded. */
+  wired: boolean;
+}
+
+/** Live connection state for a connector (never carries secret material). */
+export interface ConnectorStatus {
+  id: string;
+  kind: ConnectorKind;
+  name: string;
+  authType: ConnectorAuthType;
+  scopes: string[];
+  capabilities: string[];
+  description: string;
+  wired: boolean;
+  /** True when usable: oauth/apiKey → credential present; model → CLI installed + logged in. */
+  connected: boolean;
+  /** Scopes actually granted (oauth), else the requested scopes. */
+  scopesGranted: string[];
+  lastUsedAt?: string;
+  /** e.g. the connected account email, or the CLI version. */
+  accountLabel?: string;
+  /** Human-readable extra status (e.g. "CLI not installed", "needs reconnect"). */
+  detail?: string;
+  cli?: { command: string; signInHint: string; installHint: string };
+}
+
+/** Response of `POST /connectors/:id/connect`. */
+export interface ConnectorConnectResult {
+  /** For oauth2: the URL to open for consent. */
+  authUrl?: string;
+  /** For subscriptionCli/apiKey: the refreshed status after the attempt. */
+  status?: ConnectorStatus;
+}
+
+// ── Storage connector interface (uniform across Drive/Dropbox/OneDrive) ───────
+
+export interface StorageCapabilities {
+  list: boolean;
+  read: boolean;
+  write: boolean;
+  delete: boolean;
+  metadata: boolean;
+}
+
+export interface StorageEntry {
+  id: string;
+  name: string;
+  path: string;
+  isFolder: boolean;
+  sizeBytes?: number;
+  mimeType?: string;
+  modifiedAt?: string;
+}
+
+/** The reference interface every storage adapter implements (data flows: later milestones). */
+export interface StorageConnector {
+  readonly capabilities: StorageCapabilities;
+  list(path: string): Promise<StorageEntry[]>;
+  read(fileId: string): Promise<Uint8Array>;
+  write(path: string, bytes: Uint8Array): Promise<StorageEntry>;
+  delete(fileId: string): Promise<void>;
+  getMetadata(fileId: string): Promise<StorageEntry>;
+}
+
+// ── Literature source interface (arXiv/CrossRef/Zotero/…) ─────────────────────
+
+export interface LiteratureCapabilities {
+  search: boolean;
+  metadata: boolean;
+  bibtex: boolean;
+  /** Whether the source LEGALLY permits PDF download (arXiv yes; publishers usually no). */
+  pdf: boolean;
+}
+
+export interface LiteratureResult {
+  id: string;
+  title: string;
+  authors: string;
+  year: string;
+  doi?: string;
+  abstract?: string;
+  /** Which source produced this (provenance). */
+  source: string;
+}
+
+export interface LiteratureSource {
+  readonly capabilities: LiteratureCapabilities;
+  search(query: string): Promise<LiteratureResult[]>;
+  getMetadata(id: string): Promise<LiteratureResult>;
+  getBibTeX(id: string): Promise<string>;
+  /** Only present when `capabilities.pdf` is true. */
+  getPDF?(id: string): Promise<Uint8Array>;
 }

@@ -46,9 +46,10 @@ async function mockApi(page: Page) {
 
 test('document review surfaces four-axis findings with the honesty distinction and in-app links', async ({ page }) => {
   await mockApi(page);
-  await page.goto('/');
+  await page.goto('/studio');
   await expect(page.locator('.cm-content')).toBeVisible();
 
+  await page.getByTestId('tools-menu').click();
   await page.getByTestId('review').click();
 
   // The four axes are present.

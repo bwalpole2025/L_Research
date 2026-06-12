@@ -133,10 +133,58 @@ one. The PDF and `.synctex.gz` are served from authenticated routes.
 
 In the UI: **Compile** button or **⌘↵**, a **compile-on-save** toggle, a
 diagnostics panel under the editor (click a row to jump to `file:line`), and a
-pdf.js viewer with page nav / zoom / fit-width that preserves scroll across
-recompiles. The compile workspace is a host directory bind-mounted into texlive
+pdf.js viewer with page nav / zoom / fit-width / **download** (named after the
+root file, e.g. `main.pdf`; the Review toggle downloads `….review.pdf`) that
+preserves scroll across recompiles. The compile workspace is a host directory bind-mounted into texlive
 (see [docs/decisions.md](docs/decisions.md), ADR-003), so the host-run api and
 texlive share files directly.
+
+### Autocomplete (deterministic, offline)
+
+IDE-grade LaTeX completion, **entirely local — no model calls, no network**. It
+is separate from the AI ghost text above and the two coexist with a defined
+precedence. Three layers:
+
+1. **`\` commands** — type `\` (or `\inc…`) for a dropdown built from a curated
+   dictionary (LaTeX/amsmath/graphicx/hyperref, each with a one-line description
+   and arg hints), **this project's own macros** (`\newcommand`/`\def`/
+   `\DeclareMathOperator` + the Settings macro table, ranked first), and commands
+   implied by your loaded `\usepackage{…}`.
+2. **Context-aware values** — the cursor's command/argument is read from the line
+   and the right candidates are offered, each **only** in its context:
+   `\includegraphics{` → project images (relative paths) · `\input`/`\include{` →
+   `.tex` files · `\cite`/`\citep`/`\citet`/`\autocite{` → `.bib` keys with
+   author/year/title · `\ref`/`\eqref`/`\cref{` → defined `\label`s with their
+   heading/equation context · `\begin`/`\end{` → environments (static + custom) ·
+   `\usepackage`/`\documentclass{` → packages/classes. An empty index contributes
+   nothing (no noise).
+3. **Snippets** — templates with `${…}` tab stops (figure, table, equation,
+   align, gather, multline, itemize, theorem/lemma/proof, `\frac`, `\sqrt`,
+   `cases`, …). Tab / Shift-Tab cycle the stops; the first is selected on insert.
+   Accepting `\begin{env}` (or typing the closing `}`) auto-inserts the matching
+   `\end{env}` with the cursor between — a single pairing path, never duplicated.
+
+The dropdown is styled after **Overleaf's** source editor (palette and layout
+from its open-source `auto-complete.ts`): flat tooltip in the editor font,
+matched characters recoloured (blue light / lime dark) instead of underlined,
+muted right-aligned descriptions, Overleaf's green selection in dark mode, and
+zero interaction delay.
+
+**Keys & coexistence with ghost text.** Arrows navigate, **Esc** closes,
+**Tab/Enter** insert the highlighted item (Tab also advances snippet stops).
+While the dropdown is open it owns the keys and the inline ghost suggestion is
+hidden; when it closes the ghost resumes. So **Tab is never ambiguous**: dropdown
+open → it accepts the dropdown item / advances a snippet stop; no dropdown → it
+accepts the ghost. Toggle the whole feature or any individual source in
+**Project settings → LaTeX autocomplete (offline)**.
+
+**Extending it.** All static vocabulary lives in one data file,
+[`apps/web/components/editor/latexData.ts`](apps/web/components/editor/latexData.ts)
+(see its header comment): append to `COMMANDS` (add `snippet:` for a template),
+`WORD_SNIPPETS`, `ENVIRONMENTS`, `PACKAGES`, `CLASSES`, or `PACKAGE_COMMANDS`. The
+document-derived sources (macros, labels, bib keys, packages) and the contracts
+above are covered by `apps/web/test/latexAutocomplete.test.ts` and
+`apps/web/test/autocompleteCoexist.test.ts`.
 
 ---
 

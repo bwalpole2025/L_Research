@@ -158,45 +158,33 @@ export function EditorApp() {
       {projects.length === 0 ? (
         <CreateFirstProject />
       ) : (
-        <div className="flex min-h-0 flex-1 bg-[var(--ls-bg)] p-2">
+        <div className="flex min-h-0 flex-1 bg-[var(--ls-bg)]">
           <PanelGroup direction="horizontal" className="min-h-0 min-w-0 flex-1" autoSaveId="latex-studio:panels">
-            <Panel
-              defaultSize={18}
-              minSize={12}
-              className="overflow-hidden rounded-md border border-zinc-200 bg-[var(--ls-surface)] shadow-[var(--ls-shadow-soft)] dark:border-zinc-800"
-            >
+            <Panel defaultSize={18} minSize={12} className="overflow-hidden border-r border-[var(--ls-line)]">
               <LeftRail />
             </Panel>
-            <PanelResizeHandle className="w-2 bg-transparent transition-colors hover:bg-blue-400/20" />
+            <PanelResizeHandle className="w-1 bg-transparent transition-colors hover:bg-[#4e68f5]/30" />
 
-            <Panel
-              defaultSize={48}
-              minSize={25}
-              className="overflow-hidden rounded-md border border-zinc-200 bg-[var(--ls-surface)] shadow-[var(--ls-shadow-soft)] dark:border-zinc-800"
-            >
+            <Panel defaultSize={48} minSize={25} className="overflow-hidden bg-[var(--ls-surface)]">
               <PanelGroup direction="vertical" autoSaveId="latex-studio:editor-panels">
                 <Panel defaultSize={68} minSize={25}>
                   <EditorPane />
                 </Panel>
-                <PanelResizeHandle className="h-2 bg-[var(--ls-bg)] transition-colors hover:bg-blue-400/20" />
-                <Panel defaultSize={32} minSize={12} collapsible className="border-t border-zinc-200 dark:border-zinc-800">
+                <PanelResizeHandle className="h-1 bg-transparent transition-colors hover:bg-[#4e68f5]/30" />
+                <Panel defaultSize={32} minSize={12} collapsible className="border-t border-[var(--ls-line)]">
                   <BottomPanelTabs />
                 </Panel>
               </PanelGroup>
             </Panel>
 
-            <PanelResizeHandle className="w-2 bg-transparent transition-colors hover:bg-blue-400/20" />
-            <Panel
-              defaultSize={34}
-              minSize={18}
-              className="overflow-hidden rounded-md border border-zinc-200 bg-[var(--ls-surface)] shadow-[var(--ls-shadow-soft)] dark:border-zinc-800"
-            >
+            <PanelResizeHandle className="w-1 bg-transparent transition-colors hover:bg-[#4e68f5]/30" />
+            <Panel defaultSize={34} minSize={18} className="overflow-hidden border-l border-[var(--ls-line)]">
               <PdfViewer />
             </Panel>
           </PanelGroup>
 
           {chatOpen && (
-            <aside className="ml-2 w-96 shrink-0 overflow-hidden rounded-md border border-zinc-200 bg-[var(--ls-surface)] shadow-[var(--ls-shadow-soft)] dark:border-zinc-800">
+            <aside className="w-96 shrink-0 overflow-hidden border-l border-[var(--ls-line)] bg-[var(--ls-surface)]">
               <ChatSidebar />
             </aside>
           )}

@@ -76,7 +76,7 @@ async function mockApi(page: Page) {
 
 test('outline reflects multi-file structure and jumps three files away', async ({ page }) => {
   await mockApi(page);
-  await page.goto('/');
+  await page.goto('/studio');
   await expect(page.locator('.cm-content')).toBeVisible();
 
   await page.getByTestId('left-tab-outline').click();
@@ -91,7 +91,7 @@ test('outline reflects multi-file structure and jumps three files away', async (
 
 test('cross-reference health flags undefined ref, duplicate label, and missing cite', async ({ page }) => {
   await mockApi(page);
-  await page.goto('/');
+  await page.goto('/studio');
   await expect(page.locator('.cm-content')).toBeVisible();
 
   await page.getByTestId('tab-refs').click();
@@ -102,9 +102,10 @@ test('cross-reference health flags undefined ref, duplicate label, and missing c
 
 test('pre-submit produces the dashboard with a not-ready verdict + export', async ({ page }) => {
   await mockApi(page);
-  await page.goto('/');
+  await page.goto('/studio');
   await expect(page.locator('.cm-content')).toBeVisible();
 
+  await page.getByTestId('tools-menu').click();
   await page.getByTestId('pre-submit').click();
   await expect(page.getByTestId('presubmit-ready')).toHaveAttribute('data-ready', 'false');
   await expect(page.getByText('Not ready — issues remain')).toBeVisible();

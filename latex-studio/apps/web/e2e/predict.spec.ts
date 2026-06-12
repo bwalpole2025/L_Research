@@ -34,7 +34,7 @@ async function mockApi(page: Page) {
 
 test('predict next renders a distinct multi-line ghost block and Tab accepts it', async ({ page }) => {
   await mockApi(page);
-  await page.goto('/');
+  await page.goto('/studio');
   await expect(page.locator('.cm-content')).toBeVisible();
   await page.locator('.cm-content').click(); // focus + cursor
 
@@ -50,7 +50,7 @@ test('predict next renders a distinct multi-line ghost block and Tab accepts it'
 
 test('the document-aware toggle is shown and on by default', async ({ page }) => {
   await mockApi(page);
-  await page.goto('/');
+  await page.goto('/studio');
   await expect(page.locator('.cm-content')).toBeVisible();
   await expect(page.getByTestId('toggle-docaware')).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByTestId('docmodel-refreshed')).toBeVisible();

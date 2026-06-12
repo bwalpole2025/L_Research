@@ -6,6 +6,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Crosshair,
+  Download,
   Loader2,
   Maximize,
   Play,
@@ -37,6 +38,24 @@ interface Highlight {
   nonce: number;
 }
 
+/** Filename for the downloaded PDF, derived from what is being viewed.
+ *  Exported for tests. */
+export function pdfDownloadName(
+  rootFile: string | null,
+  mode: 'clean' | 'review' | 'literature',
+  literatureTitle: string | null,
+): string {
+  if (mode === 'literature') {
+    const title = (literatureTitle ?? '')
+      .replace(/[\\/:*?"<>|]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return `${title || 'article'}.pdf`;
+  }
+  const base = (rootFile ?? 'document').split('/').pop()!.replace(/\.tex$/i, '') || 'document';
+  return mode === 'review' ? `${base}.review.pdf` : `${base}.pdf`;
+}
+
 // Lazy-loaded so pdf.js (browser-only) is never evaluated during SSR.
 let pdfjsPromise: Promise<typeof import('pdfjs-dist')> | null = null;
 async function loadPdfjs() {
@@ -56,12 +75,13 @@ export function PdfViewer() {
   const literaturePdfUrl = useReviewStore((s) => s.literaturePdfUrl);
   const literatureTitle = useReviewStore((s) => s.literatureTitle);
   const setReviewMode = useReviewStore((s) => s.setPdfMode);
+  // What is actually displayed (the review/literature toggles fall back to the
+  // clean PDF when their URL is missing) — the download follows this too.
+  const effectiveMode: 'clean' | 'review' | 'literature' =
+    reviewMode === 'literature' && literaturePdfUrl ? 'literature' : reviewMode === 'review' && reviewPdfUrl ? 'review' : 'clean';
   const effectiveUrl =
-    reviewMode === 'literature' && literaturePdfUrl
-      ? literaturePdfUrl
-      : reviewMode === 'review' && reviewPdfUrl
-        ? reviewPdfUrl
-        : pdfUrl;
+    effectiveMode === 'literature' ? literaturePdfUrl : effectiveMode === 'review' ? reviewPdfUrl : pdfUrl;
+  const rootFile = useEditorStore((s) => s.projects.find((p) => p.id === s.projectId)?.rootFile ?? null);
   const compiling = useEditorStore((s) => s.compiling);
   const theme = useEditorStore((s) => s.theme);
   const forwardHighlight = useEditorStore((s) => s.forwardHighlight);
@@ -245,6 +265,34 @@ export function PdfViewer() {
 
   const hasPdf = Boolean(effectiveUrl) && numPages > 0;
 
+  // Download the displayed PDF. The fetch goes through the same authenticated
+  // /api proxy as the viewer, so no token ever reaches the markup.
+  const downloadPdf = useCallback(async () => {
+    if (!effectiveUrl) return;
+    try {
+      const res = await fetch(effectiveUrl);
+      if (!res.ok) return;
+      const blob = await res.blob();
+      const href = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = href;
+      a.download = pdfDownloadName(rootFile, effectiveMode, literatureTitle);
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.setTimeout(() => URL.revokeObjectURL(href), 4000);
+    } catch {
+      /* network hiccup — nothing downloaded */
+    }
+  }, [effectiveUrl, rootFile, effectiveMode, literatureTitle]);
+
+  // The editor top bar's download icon triggers the same download.
+  useEffect(() => {
+    const onDownload = () => void downloadPdf();
+    window.addEventListener('ls:download-pdf', onDownload);
+    return () => window.removeEventListener('ls:download-pdf', onDownload);
+  }, [downloadPdf]);
+
   return (
     <div className="flex h-full flex-col bg-zinc-100 dark:bg-zinc-950">
       <div className="flex h-10 items-center gap-1 border-b border-zinc-200 bg-[var(--ls-surface-muted)] px-2 text-xs dark:border-zinc-800">
@@ -364,6 +412,17 @@ export function PdfViewer() {
             className={pdfButton}
           >
             <Crosshair className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            aria-label="Download PDF"
+            title="Download PDF"
+            data-testid="pdf-download"
+            disabled={!hasPdf}
+            onClick={() => void downloadPdf()}
+            className={pdfButton}
+          >
+            <Download className="h-4 w-4" />
           </button>
           <button
             type="button"

@@ -10,6 +10,7 @@ import { CompletionService, type CompletionRunner } from './ai/completion/servic
 import { assertSubscriptionAuth, createModelProvider } from './providers/index.js';
 import { healthRoutes } from './routes/health.js';
 import { projectRoutes } from './routes/projects.js';
+import { projectFolderRoutes } from './routes/projectFolders.js';
 import { fileRoutes } from './routes/files.js';
 import { snapshotRoutes } from './routes/snapshots.js';
 import { compileRoutes } from './routes/compile.js';
@@ -20,10 +21,15 @@ import { coderiveRoutes } from './routes/coderive.js';
 import { reviewRoutes } from './routes/review.js';
 import { libraryRoutes } from './routes/library.js';
 import { docmodelRoutes } from './routes/docmodel.js';
+import { previewRoutes } from './routes/preview.js';
+import { usageRoutes } from './routes/usage.js';
+import { connectorRoutes } from './routes/connectors.js';
+import { Vault } from './vault/vault.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
     config: AppConfig;
+    vault: Vault;
   }
 }
 
@@ -63,6 +69,9 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await app.register(cors, { origin: true });
   await app.register(prismaPlugin);
 
+  // The credential vault needs the Prisma client, so it's decorated after it.
+  app.decorate('vault', new Vault(app.prisma, config));
+
   // Auth first (global onRequest hook), then routes. Public paths are
   // allow-listed inside the auth plugin.
   await app.register(authPlugin);
@@ -70,6 +79,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
 
   // Feature routes (all bearer-protected).
   await app.register(projectRoutes);
+  await app.register(projectFolderRoutes);
   await app.register(fileRoutes);
   await app.register(snapshotRoutes);
   await app.register(compileRoutes);
@@ -80,6 +90,9 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await app.register(reviewRoutes);
   await app.register(libraryRoutes);
   await app.register(docmodelRoutes);
+  await app.register(previewRoutes);
+  await app.register(usageRoutes);
+  await app.register(connectorRoutes);
 
   return app;
 }

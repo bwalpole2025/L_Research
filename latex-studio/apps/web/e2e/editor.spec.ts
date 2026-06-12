@@ -39,7 +39,7 @@ test('save indicator cycles dirty → saving → saved while editing', async ({ 
     return json(route, { error: `unmocked ${method} ${path}` }, 404);
   });
 
-  await page.goto('/');
+  await page.goto('/studio');
 
   // The app auto-opens the root file; wait for the editor to be ready.
   const editor = page.locator('.cm-content');

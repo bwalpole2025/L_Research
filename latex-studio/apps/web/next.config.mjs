@@ -1,6 +1,11 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  // Two `next dev` instances must NEVER share a build dir (route-manifest
+  // corruption → spurious 404s on every route, including /api/*). The Playwright
+  // e2e web server sets NEXT_DIST_DIR so its build stays out of the live dev
+  // server's .next.
+  distDir: process.env.NEXT_DIST_DIR || '.next',
   // @latex-studio/shared is consumed as TypeScript source.
   transpilePackages: ['@latex-studio/shared'],
   // NOTE: browser calls to /api/* are handled by the catch-all Route Handler at

@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- LaTeX Studio counterchange monogram: a serif S split along the diagonal —
+       light on the dark field, dark on the light field (brand sheet).
+       Ink Navy #12264D · Azure #6C9CF0 -->
+  <defs>
+    <clipPath id="tile"><rect width="64" height="64" rx="14"/></clipPath>
+    <clipPath id="ink"><path d="M0 0H64L0 64Z"/></clipPath>
+    <clipPath id="azure"><path d="M64 0V64H0Z"/></clipPath>
+  </defs>
+  <g clip-path="url(#tile)">
+    <rect width="64" height="64" fill="#12264D"/>
+    <path d="M64 0V64H0Z" fill="#6C9CF0"/>
+    <g clip-path="url(#ink)">
+      <text x="32" y="33" font-family="Georgia, 'Times New Roman', serif" font-size="46" font-weight="700" fill="#6C9CF0" text-anchor="middle" dominant-baseline="central">S</text>
+    </g>
+    <g clip-path="url(#azure)">
+      <text x="32" y="33" font-family="Georgia, 'Times New Roman', serif" font-size="46" font-weight="700" fill="#12264D" text-anchor="middle" dominant-baseline="central">S</text>
+    </g>
+  </g>
+</svg>

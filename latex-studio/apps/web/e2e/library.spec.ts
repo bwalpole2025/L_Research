@@ -42,7 +42,7 @@ async function mockApi(page: Page) {
 
 test('library: tree, upload-confirm, cite-key link, literature view, trash restore + 2-step empty', async ({ page }) => {
   await mockApi(page);
-  await page.goto('/');
+  await page.goto('/studio');
   await expect(page.locator('.cm-content')).toBeVisible();
 
   await page.getByTestId('left-tab-literature').click();

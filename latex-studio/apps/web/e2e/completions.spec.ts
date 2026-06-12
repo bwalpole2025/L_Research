@@ -51,7 +51,7 @@ async function triggerGhost(page: Page) {
 
 test('Tab accepts the ghost suggestion', async ({ page }) => {
   await mockApi(page);
-  await page.goto('/');
+  await page.goto('/studio');
   await triggerGhost(page);
 
   await page.keyboard.press('Tab');
@@ -60,7 +60,7 @@ test('Tab accepts the ghost suggestion', async ({ page }) => {
 
 test('Esc dismisses the ghost suggestion without inserting', async ({ page }) => {
   await mockApi(page);
-  await page.goto('/');
+  await page.goto('/studio');
   await triggerGhost(page);
 
   await page.keyboard.press('Escape');
@@ -89,7 +89,7 @@ test('a wrong align step gets the amber verification underline', async ({ page }
     return json(route, { error: `unmocked ${method} ${path}` }, 404);
   });
 
-  await page.goto('/');
+  await page.goto('/studio');
   await expect(page.locator('.cm-content')).toBeVisible();
   await page.getByText('CURSORHERE').click();
   await page.keyboard.press('End'); // end of the in-progress align step (display-align mode)

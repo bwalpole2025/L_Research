@@ -1,10 +1,11 @@
 import { readFile, writeFile } from 'node:fs/promises';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type { ContextBundle, ReviewResponse } from '@latex-studio/shared';
 import { markAiError, markAiOk } from '../ai/status.js';
 import { buildReferences, type RefFile } from '../coderive/references.js';
 import { runReview, reviewTotals } from '../review/engine.js';
+import { resolveModelProvider } from '../providers/registry.js';
 import { mapFindingsToPdf } from '../review/coords.js';
 import { annotatePdf } from '../review/annotate.js';
 import { loadLibraryResolver } from '../literature/refs.js';
@@ -35,7 +36,7 @@ function citedKeys(texts: string[]): string[] {
 }
 
 export async function reviewRoutes(app: FastifyInstance): Promise<void> {
-  app.post<{ Params: { id: string } }>('/projects/:id/review', async (request, reply) => {
+  const handler = async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
     const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
     if (!project) return reply.callNotFound();
     const parsed = reviewBody.safeParse(request.body);
@@ -77,14 +78,33 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
 
     const deterministicOnly = parsed.data.deterministicOnly ?? false;
     const start = Date.now();
+    // RAG axes only engage when the library has an embedded index — otherwise they
+    // degrade to nothing (no model or embedding calls for an empty library).
+    const chunkCount = await app.prisma.libraryChunk.count({ where: { projectId: project.id } }).catch(() => 0);
+    // Route to the project's selected model connector (Claude/ChatGPT/Gemini).
+    const { provider: modelProvider, model: aiModel } = await resolveModelProvider(app, project);
     const { findings, aiError } = await runReview({
       texFiles,
+      allFiles: allFiles.filter((f) => f.encoding !== 'base64').map((f) => ({ path: f.path, content: f.content })),
+      rootFile: project.rootFile,
       bundle,
       customWords: project.customWords,
       mathcheckUrl: app.config.mathcheckUrl,
-      modelProvider: app.modelProvider,
-      model: project.model,
+      modelProvider,
+      model: aiModel,
       deterministicOnly,
+      ...(chunkCount > 0
+        ? {
+            rag: {
+              prisma: app.prisma,
+              projectId: project.id,
+              mathcheckUrl: app.config.mathcheckUrl,
+              modelProvider,
+              model: aiModel,
+              libraryItems,
+            },
+          }
+        : {}),
     });
     if (aiError) markAiError(aiError);
     else if (!deterministicOnly) markAiOk();
@@ -93,7 +113,7 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
         data: {
           projectId: project.id,
           route: 'review',
-          model: project.model,
+          model: aiModel,
           latencyMs: Date.now() - start,
           ok: !aiError,
           ...(aiError ? { errorKind: aiError } : {}),
@@ -112,11 +132,15 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
       pdfBuffer = null;
     }
     // Highlight only ACTIONABLE findings on the PDF — a wrong equation (green), a
-    // statement to check (yellow), or a grammar/spelling fix (red). "Unknown" maths
-    // (SymPy couldn't parse/decide) is NOT wrong, so it is listed in the panel but
-    // never highlighted — otherwise it would bury the real issues. This also avoids
-    // a SyncTeX lookup per unchecked equation.
-    const annotatable = findings.filter((f) => !(f.axis === 'maths' && f.confidence === 'unknown'));
+    // structural ref error (red), a RAG-grounded contradiction (orange, evidence in
+    // the popup), a statement to check (yellow), or a grammar fix (red underline).
+    // Honest non-errors ("unknown" maths, "no library source", "attribution
+    // unverified", "supported") are listed in the panel but never highlighted —
+    // they would bury the real issues.
+    const NOTE_TIERS = new Set(['no-library-source', 'attribution-unverified', 'rag-supported']);
+    const annotatable = findings.filter(
+      (f) => !(f.axis === 'maths' && f.confidence === 'unknown') && !NOTE_TIERS.has(f.confidence),
+    );
     if (pdfBuffer && annotatable.length > 0) {
       const coords = await mapFindingsToPdf(annotatable, (file, line) =>
         app.compileService.forward(project.id, project.rootFile, file, line),
@@ -146,7 +170,11 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
       ...(reviewPdfUrl ? { reviewPdfUrl } : {}),
     };
     return response;
-  });
+  };
+
+  app.post<{ Params: { id: string } }>('/projects/:id/review', handler);
+  // The full document check (same pipeline; explicit name for the compile hook).
+  app.post<{ Params: { id: string } }>('/projects/:id/check', handler);
 
   app.get<{ Params: { id: string } }>('/projects/:id/review-pdf', async (request, reply) => {
     const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });

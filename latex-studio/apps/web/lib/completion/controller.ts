@@ -1,6 +1,7 @@
 'use client';
 
 import type { EditorView } from '@codemirror/view';
+import { completionStatus } from '@codemirror/autocomplete';
 import { api, AiError, completeCode } from '../api';
 import { useEditorStore } from '../store';
 import { useCompletionStore } from '../completionStore';
@@ -49,6 +50,9 @@ export class CompletionController {
         if (!v) return;
         // Discard if the cursor moved since the request was issued.
         if (v.state.selection.main.head !== ctx.pos) return;
+        // Precedence: while the autocomplete dropdown is open it owns the
+        // screen — drop the arrival instead of racing its state.
+        if (completionStatus(v.state) !== null) return;
         applySuggestion(v, { from: ctx.pos, text, mode: ctx.mode });
       },
       onClear: () => {

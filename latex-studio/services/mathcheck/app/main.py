@@ -98,6 +98,8 @@ def check_derivation_endpoint(req: DerivationRequest) -> dict[str, Any]:
 class AnnotateRequest(BaseModel):
     pdf_base64: str
     findings: list[dict[str, Any]]
+    # Optional overall commentary appended as its own page(s): {"title", "text"}.
+    summary: dict[str, Any] | None = None
 
 
 @app.post("/annotate-pdf")
@@ -105,7 +107,7 @@ def annotate_pdf_endpoint(req: AnnotateRequest) -> dict[str, Any]:
     from .annotate import annotate_pdf
 
     try:
-        return annotate_pdf(req.pdf_base64, req.findings)
+        return annotate_pdf(req.pdf_base64, req.findings, req.summary)
     except Exception as exc:  # noqa: BLE001 - never crash the service on a bad PDF
         return {"error": f"annotation failed: {exc}", "pdf_base64": None, "annotations": 0}
 
@@ -122,6 +124,33 @@ def extract_pdf_endpoint(req: ExtractRequest) -> dict[str, Any]:
         return extract_text(req.pdf_base64)
     except Exception as exc:  # noqa: BLE001
         return {"error": f"extraction failed: {exc}", "text": "", "pageCount": 0}
+
+
+class PdfPngRequest(BaseModel):
+    pdf_base64: str
+    dpi: int = 160
+    page: int = 1
+
+
+@app.post("/pdf-png")
+def pdf_png_endpoint(req: PdfPngRequest) -> dict[str, Any]:
+    """Rasterise one PDF page to PNG (PyMuPDF) — used by the snippet renderer
+    that gives the Visual editor its semi-compiled maths and TikZ diagrams."""
+    import base64 as b64
+
+    import fitz
+
+    try:
+        doc = fitz.open(stream=b64.b64decode(req.pdf_base64), filetype="pdf")
+        pno = max(0, min(req.page - 1, doc.page_count - 1))
+        zoom = max(36, min(req.dpi, 400)) / 72.0
+        pix = doc[pno].get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=True)
+        png = pix.tobytes("png")
+        out = {"png_base64": b64.b64encode(png).decode("ascii"), "width": pix.width, "height": pix.height}
+        doc.close()
+        return out
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"rasterise failed: {exc}", "png_base64": "", "width": 0, "height": 0}
 
 
 # ── /embed — local sentence embeddings for the RAG document check ─────────────

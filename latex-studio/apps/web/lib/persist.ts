@@ -49,14 +49,49 @@ export function saveLastProject(projectId: string): void {
 const COMPILE_ON_SAVE_KEY = 'latex-studio:compileOnSave';
 
 export function loadCompileOnSave(): boolean {
-  if (!hasWindow()) return false;
-  return window.localStorage.getItem(COMPILE_ON_SAVE_KEY) === 'true';
+  // Default ON: the PDF keeps itself fresh as you work ("live preview").
+  // An explicit user choice (either way) is respected.
+  if (!hasWindow()) return true;
+  return window.localStorage.getItem(COMPILE_ON_SAVE_KEY) !== 'false';
 }
 
 export function saveCompileOnSave(value: boolean): void {
   if (!hasWindow()) return;
   try {
     window.localStorage.setItem(COMPILE_ON_SAVE_KEY, value ? 'true' : 'false');
+  } catch {
+    /* ignore */
+  }
+}
+
+// Home project-explorer UI state: which folders are expanded and which folder is
+// selected. App-level (not per-project), so a single key.
+const PROJECT_FOLDERS_KEY = 'latex-studio:projectFolders';
+
+export interface ProjectFolderUi {
+  expanded: string[];
+  selected: string | null;
+}
+
+export function loadProjectFolderUi(): ProjectFolderUi {
+  if (!hasWindow()) return { expanded: [], selected: null };
+  try {
+    const raw = window.localStorage.getItem(PROJECT_FOLDERS_KEY);
+    if (!raw) return { expanded: [], selected: null };
+    const parsed = JSON.parse(raw) as Partial<ProjectFolderUi>;
+    return {
+      expanded: Array.isArray(parsed.expanded) ? parsed.expanded : [],
+      selected: typeof parsed.selected === 'string' ? parsed.selected : null,
+    };
+  } catch {
+    return { expanded: [], selected: null };
+  }
+}
+
+export function saveProjectFolderUi(state: ProjectFolderUi): void {
+  if (!hasWindow()) return;
+  try {
+    window.localStorage.setItem(PROJECT_FOLDERS_KEY, JSON.stringify(state));
   } catch {
     /* ignore */
   }

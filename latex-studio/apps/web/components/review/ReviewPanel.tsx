@@ -1,8 +1,9 @@
 'use client';
 
-import { CircleAlert, FileSearch, Info, Loader2, Play, Sparkles, TriangleAlert, Wand2 } from 'lucide-react';
+import { BookOpen, CircleAlert, FileSearch, Info, Loader2, Play, Sparkles, TriangleAlert, Wand2 } from 'lucide-react';
 import { reviewStyle } from '@latex-studio/shared';
 import { useReviewStore } from '@/lib/reviewStore';
+import { api } from '@/lib/api';
 import type { ReviewAxis, ReviewFinding, ReviewSeverity } from '@/lib/types';
 
 const SEV_ICON = { error: CircleAlert, warning: TriangleAlert, info: Info } as const;
@@ -21,6 +22,7 @@ function Row({ finding }: { finding: ReviewFinding }) {
   const explain = useReviewStore((s) => s.explain);
   const applyCorrection = useReviewStore((s) => s.applyCorrection);
   const canCorrect = useReviewStore((s) => s.canCorrect);
+  const viewLiterature = useReviewStore((s) => s.viewLiterature);
   const style = reviewStyle(finding.axis, finding.confidence);
   const Icon = SEV_ICON[finding.severity];
 
@@ -70,6 +72,26 @@ function Row({ finding }: { finding: ReviewFinding }) {
               [{finding.reference}]{finding.quotedSpan ? ` — “${finding.quotedSpan}”` : ''}
             </p>
           )}
+          {/* RAG evidence: the retrieved passage IS the finding's basis — quote it
+              and link straight to the source article in the Library viewer. */}
+          {(finding.retrievedPassages ?? []).map((p, i) => (
+            <div key={i} data-testid="rag-evidence" className="mt-1 rounded border border-orange-200 bg-orange-50/60 px-2 py-1 text-[11px] text-zinc-600 dark:border-orange-500/30 dark:bg-orange-500/5 dark:text-zinc-300">
+              <p className="italic">“{p.text.length > 240 ? `${p.text.slice(0, 240)}…` : p.text}”</p>
+              <p className="mt-0.5 flex items-center gap-2 text-zinc-400">
+                <span>
+                  {p.sourceTitle ?? 'library article'} · p.{p.page || '?'} · score {p.score}
+                </span>
+                <button
+                  type="button"
+                  data-testid="open-evidence-source"
+                  onClick={() => viewLiterature(api.libItemPdfUrl(p.literatureItemId), `${p.sourceTitle ?? 'Source'} (p.${p.page || '?'})`)}
+                  className="inline-flex items-center gap-1 rounded border border-orange-300 px-1.5 py-0.5 font-medium text-orange-700 hover:bg-orange-100 dark:border-orange-500/40 dark:text-orange-300 dark:hover:bg-orange-500/10"
+                >
+                  <BookOpen className="h-3 w-3" /> Open source
+                </button>
+              </p>
+            </div>
+          ))}
         </div>
       </div>
     </li>

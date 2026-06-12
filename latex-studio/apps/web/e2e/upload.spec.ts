@@ -44,7 +44,7 @@ async function mockApi(page: Page) {
 
 test('uploads a text .bib file and it appears in the tree', async ({ page }) => {
   await mockApi(page);
-  await page.goto('/');
+  await page.goto('/studio');
   await expect(page.locator('.cm-content')).toBeVisible();
 
   await page.getByTestId('file-upload-input').setInputFiles({
@@ -58,7 +58,7 @@ test('uploads a text .bib file and it appears in the tree', async ({ page }) => 
 
 test('uploads a PNG and shows the binary image preview', async ({ page }) => {
   await mockApi(page);
-  await page.goto('/');
+  await page.goto('/studio');
   await expect(page.locator('.cm-content')).toBeVisible();
 
   await page.getByTestId('file-upload-input').setInputFiles({

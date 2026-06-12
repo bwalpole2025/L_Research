@@ -16,28 +16,31 @@ export function LeftRail() {
   const tab = useThesisStore((s) => s.leftTab);
   const setTab = useThesisStore((s) => s.setLeftTab);
 
+  const heading = tab === 'files' ? 'Project files' : tab === 'outline' ? 'Outline' : 'Library';
+
   return (
-    <div className="flex h-full flex-col bg-[var(--ls-surface)]">
-      <div className="shrink-0 border-b border-zinc-200 bg-[var(--ls-surface-muted)] p-2 dark:border-zinc-800" role="tablist">
-        <div className="grid grid-cols-3 gap-1 rounded-md border border-zinc-200 bg-zinc-100 p-1 dark:border-zinc-800 dark:bg-zinc-950">
-        {TABS.map(({ key, label, icon: Icon }) => (
-          <button
-            key={key}
-            type="button"
-            role="tab"
-            aria-selected={tab === key}
-            data-testid={`left-tab-${key}`}
-            onClick={() => setTab(key)}
-            className={`inline-flex h-8 items-center justify-center gap-1.5 rounded px-2 text-xs font-medium transition-colors ${
-              tab === key
-                ? 'bg-white text-zinc-950 shadow-sm dark:bg-zinc-900 dark:text-zinc-50'
-                : 'text-zinc-500 hover:bg-white/70 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-900/70 dark:hover:text-zinc-100'
-            }`}
-          >
-            <Icon className="h-3.5 w-3.5" />
-            <span>{label}</span>
-          </button>
-        ))}
+    <div className="flex h-full flex-col bg-[var(--ls-editor-bg)]">
+      <div className="flex h-11 shrink-0 items-center justify-between border-b border-[var(--ls-line)] pl-4 pr-2" role="tablist">
+        <span className="text-[10.5px] font-semibold uppercase tracking-[0.18em] text-zinc-400 dark:text-[#5d688a]">{heading}</span>
+        <div className="flex items-center gap-0.5">
+          {TABS.map(({ key, label, icon: Icon }) => (
+            <button
+              key={key}
+              type="button"
+              role="tab"
+              aria-selected={tab === key}
+              data-testid={`left-tab-${key}`}
+              title={label}
+              onClick={() => setTab(key)}
+              className={`flex rounded-[7px] p-1.5 transition-colors ${
+                tab === key
+                  ? 'bg-zinc-100 text-zinc-900 dark:bg-[#131b30] dark:text-[#8fa3ff]'
+                  : 'text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 dark:text-[#5d688a] dark:hover:bg-[#10182b] dark:hover:text-[#aab3c8]'
+              }`}
+            >
+              <Icon className="h-4 w-4" />
+            </button>
+          ))}
         </div>
       </div>
       <div className="min-h-0 flex-1">

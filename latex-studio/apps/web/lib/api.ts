@@ -1,5 +1,9 @@
 import type {
   AiErrorKind,
+  ConnectorConnectResult,
+  ConnectorStatus,
+  UsageStatRow,
+  UsageScope,
   AiModelsResponse,
   AiStatsResponse,
   AiStatus,
@@ -36,6 +40,8 @@ import type {
   OutlineResponse,
   PreSubmitSummary,
   Project,
+  ProjectFolder,
+  ProjectFoldersResponse,
   ProseCheckReport,
   ProseRuleToggles,
   ReplacementResponse,
@@ -123,7 +129,8 @@ async function aiRequest<T>(method: string, path: string, body: unknown): Promis
 
 export const api = {
   listProjects: () => request<Project[]>('GET', '/projects'),
-  createProject: (name: string) => request<Project>('POST', '/projects', { name }),
+  createProject: (name: string, folderId?: string | null) =>
+    request<Project>('POST', '/projects', { name, ...(folderId !== undefined ? { folderId } : {}) }),
   getProject: (id: string) => request<Project>('GET', `/projects/${id}`),
   updateProject: (
     id: string,
@@ -134,8 +141,22 @@ export const api = {
       assumptions?: string;
       model?: string;
       aiInstructions?: string;
+      folderId?: string | null;
     },
   ) => request<Project>('PATCH', `/projects/${id}`, patch),
+  /** Move a project into a Home folder (null = root). Purely organisational. */
+  moveProject: (id: string, folderId: string | null) => request<Project>('PATCH', `/projects/${id}`, { folderId }),
+
+  // App-level project folders (Home explorer).
+  listProjectFolders: () => request<ProjectFoldersResponse>('GET', '/project-folders'),
+  createProjectFolder: (name: string, parentId?: string | null) =>
+    request<ProjectFolder>('POST', '/project-folders', { name, parentId: parentId ?? null }),
+  updateProjectFolder: (id: string, body: { name?: string; parentId?: string | null }) =>
+    request<ProjectFolder>('PATCH', `/project-folders/${id}`, body),
+  deleteProjectFolder: (id: string) => request<{ ok: boolean; trashedProjects: number }>('DELETE', `/project-folders/${id}`),
+  listProjectTrash: () => request<{ items: TrashItem[] }>('GET', '/project-trash'),
+  restoreProjectTrash: (trashId: string) => request<{ ok: boolean }>('POST', `/project-trash/${trashId}/restore`, {}),
+  emptyProjectTrash: () => request<{ removed: number }>('DELETE', '/project-trash'),
 
   listFiles: (projectId: string) => request<FileMeta[]>('GET', `/projects/${projectId}/files`),
   createFile: (projectId: string, path: string, content?: string, encoding?: 'utf8' | 'base64') =>
@@ -152,6 +173,8 @@ export const api = {
   restoreSnapshot: (projectId: string, snapshotId: string) =>
     request<FileMeta[]>('POST', `/projects/${projectId}/snapshots/${snapshotId}/restore`),
 
+  getCompileStatus: (projectId: string) =>
+    request<{ status: 'success' | 'error' | 'timeout' | null; at?: string }>('GET', `/projects/${projectId}/compile-status`),
   compile: (projectId: string) =>
     request<CompileResponse>('POST', `/projects/${projectId}/compile`),
   syncForward: (req: SyncForwardRequest) =>
@@ -225,6 +248,25 @@ export const api = {
   deleteLibItem: (itemId: string) => request<{ ok: boolean }>('DELETE', `/library/items/${itemId}`),
   libItemPdfUrl: (itemId: string) => `/api/library/items/${itemId}/pdf`,
 
+  // Semi-compiled snippet rendering (Visual editor: TikZ diagrams + maths fallback).
+  renderSnippet: (projectId: string, body: { latex: string; kind: 'tikz' | 'math'; inline?: boolean }) =>
+    request<{ pngBase64: string; width: number; height: number; cached: boolean }>('POST', `/projects/${projectId}/render-snippet`, body),
+
+  // Adaptive autocomplete usage (local habit data; never sent anywhere external).
+  getUsage: (projectId: string) => request<{ app: UsageStatRow[]; project: UsageStatRow[] }>('GET', `/projects/${projectId}/usage`),
+  postUsage: (projectId: string, body: { events: Array<{ key: string; scope: UsageScope; at?: string }> }) =>
+    request<void>('POST', `/projects/${projectId}/usage`, body),
+  deleteUsage: (projectId: string, scope: UsageScope) => request<void>('DELETE', `/projects/${projectId}/usage?scope=${scope}`),
+
+  // RAG index over the library (local embeddings).
+  libraryIndexStatus: (projectId: string) =>
+    request<{ items: number; itemsWithText: number; indexedItems: number; chunks: number; model: string | null; embeddingAvailable: boolean }>(
+      'GET',
+      `/projects/${projectId}/library/index-status`,
+    ),
+  reindexLibrary: (projectId: string) =>
+    request<{ indexed: number; chunks: number; skipped: number }>('POST', `/projects/${projectId}/library/reindex`, {}),
+
   // Document-aware prediction.
   documentModel: (projectId: string, body: { cursorFile?: string; cursorLine?: number; headingNote?: boolean; overrides?: FileOverrides }) =>
     request<DocumentModelResponse>('POST', `/projects/${projectId}/document-model`, body),
@@ -242,6 +284,13 @@ export const api = {
     }),
   preSubmit: (projectId: string, overrides?: FileOverrides) =>
     request<PreSubmitSummary>('POST', `/projects/${projectId}/pre-submit`, { overrides }),
+
+  // ── Connectors (model / storage / literature) ──────────────────────────────
+  listConnectors: () => request<{ connectors: ConnectorStatus[] }>('GET', '/connectors'),
+  getConnector: (id: string) => request<ConnectorStatus>('GET', `/connectors/${id}`),
+  connectConnector: (id: string, body?: { apiKey?: string }) =>
+    request<ConnectorConnectResult>('POST', `/connectors/${id}/connect`, body ?? {}),
+  disconnectConnector: (id: string) => request<ConnectorConnectResult>('POST', `/connectors/${id}/disconnect`),
 };
 
 /** Stream a "why doesn't this step follow" explanation (SSE), token by token. */

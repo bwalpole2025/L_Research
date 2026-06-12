@@ -44,6 +44,8 @@ interface ReviewState {
   applyCorrection: (finding: ReviewFinding) => Promise<void>;
   canCorrect: (finding: ReviewFinding) => boolean;
   setPdfMode: (m: PdfMode) => void;
+  /** Show an annotated PDF (e.g. from co-derive verify-document) in the Review PDF pane. */
+  showAnnotatedPdf: (url: string) => void;
   toggleAxis: (a: ReviewAxis) => void;
   toggleConfidence: (c: ReviewConfidence) => void;
   setReviewOnCompile: (v: boolean) => void;
@@ -158,6 +160,7 @@ export const useReviewStore = create<ReviewState>((set, get) => ({
 
   setPdfMode: (pdfMode) => set({ pdfMode }),
   viewLiterature: (url, title) => set({ literaturePdfUrl: url, literatureTitle: title, pdfMode: 'literature' }),
+  showAnnotatedPdf: (url) => set({ reviewPdfUrl: url.startsWith('/api') ? url : `/api${url}`, pdfMode: 'review' }),
   toggleAxis: (a) =>
     set((s) => {
       const next = new Set(s.axisFilter);

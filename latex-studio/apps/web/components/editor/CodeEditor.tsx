@@ -26,10 +26,14 @@ import type { CursorState, MathLineMarker, PendingReveal, Theme } from '@/lib/ty
 import { editorController } from '@/lib/editorController';
 import { CompletionController } from '@/lib/completion/controller';
 import { useDocumentModelStore } from '@/lib/documentModelStore';
-import { latexLanguageSupport, latexSnippets, beginEndCloser } from './latex';
+import { latexLanguageSupport, beginEndCloser } from './latex';
+import { latexAutocomplete } from './latexAutocomplete';
+import { mathPreview } from './mathPreview';
 import { editorTheme } from './theme';
 import { flashField, setFlash } from './flash';
 import { mathGutter, setMathMarkers } from './mathGutter';
+import { applyLintDiagnostics, diagnosticsLint } from './diagnosticsLint';
+import type { Diagnostic as SharedDiagnostic } from '@latex-studio/shared';
 import { inlineSuggestion } from './inlineSuggest';
 import { predictBlockExtension } from './predictBlock';
 
@@ -50,6 +54,8 @@ export interface CodeEditorProps {
   onRevealHandled: () => void;
   /** Math-check gutter markers for the active file. */
   mathMarkers: { line: number; marker: MathLineMarker }[];
+  /** Compile diagnostics for the ACTIVE file (three-tier markers). */
+  lintDiagnostics: SharedDiagnostic[];
 }
 
 /** Scroll to a line, place the cursor there, and flash it briefly. */
@@ -105,10 +111,12 @@ export function CodeEditor(props: CodeEditorProps) {
       highlightSelectionMatches(),
       search({ top: true }),
       latexLanguageSupport(),
-      latexSnippets(),
+      latexAutocomplete(),
+      mathPreview(),
       beginEndCloser,
       flashField,
       mathGutter(),
+      diagnosticsLint(),
       inlineSuggestion(completion.current!.config),
       predictBlockExtension(completion.current!.predictConfig),
       EditorView.lineWrapping,
@@ -232,6 +240,15 @@ export function CodeEditor(props: CodeEditorProps) {
   useEffect(() => {
     viewRef.current?.dispatch({ effects: setMathMarkers.of(props.mathMarkers) });
   }, [props.mathMarkers]);
+
+  // Apply compile diagnostics (gutter + squiggles) on each fresh compile and
+  // on file swap; an empty list clears every marker.
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view || props.content === undefined) return;
+    applyLintDiagnostics(view, props.lintDiagnostics);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.lintDiagnostics, props.fileId, loaded]);
 
   // Live theme toggle for the visible document.
   useEffect(() => {

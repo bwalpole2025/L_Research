@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { CheckCircle2, CircleHelp, Loader2, XCircle } from 'lucide-react';
 import { useCoderiveStore } from '@/lib/coderiveStore';
+import { useReviewStore } from '@/lib/reviewStore';
 import type { CoderiveCandidate, CoderiveSkipped, CoderiveStatus, ContextBundleSummary, DocumentVerification, MathAuditVerdict } from '@/lib/types';
 import { Markdown } from '../ai/Markdown';
 
@@ -112,6 +113,7 @@ const AUDIT_BADGE: Record<MathAuditVerdict, { cls: string; label: string; icon: 
  * insert affordance — these are findings about existing algebra, not proposals.
  */
 function DocumentVerificationView({ dv }: { dv: DocumentVerification }) {
+  const showAnnotatedPdf = useReviewStore((s) => s.showAnnotatedPdf);
   const comments = new Map(dv.comments.map((c) => [c.id, c.comment]));
   const t = dv.report.totals;
   // Show the equations SymPy could not pass; passing ones are summarised in the totals.
@@ -124,7 +126,29 @@ function DocumentVerificationView({ dv }: { dv: DocumentVerification }) {
         <span className="text-emerald-600 dark:text-emerald-400">{t.passed} ✓</span>
         <span className="text-red-600 dark:text-red-400">{t.failing} ✗</span>
         <span className="text-amber-600 dark:text-amber-400">{t.unknown} ?</span>
+        <span data-testid="docverify-pdf-status" className={dv.pdfScanned ? 'text-sky-600 dark:text-sky-400' : 'text-zinc-400'}>
+          {dv.pdfScanned ? `· compiled PDF scanned (${dv.pdfPageCount ?? '?'} pages)` : '· PDF not scanned — compile failed or missing'}
+        </span>
+        {dv.verifyPdfUrl && (
+          <button
+            type="button"
+            data-testid="open-annotated-pdf"
+            onClick={() => showAnnotatedPdf(dv.verifyPdfUrl!)}
+            className="ml-auto rounded border border-emerald-300 px-1.5 py-0.5 font-medium text-emerald-700 hover:bg-emerald-50 dark:border-emerald-500/40 dark:text-emerald-300 dark:hover:bg-emerald-500/10"
+          >
+            Open annotated PDF
+          </button>
+        )}
       </div>
+
+      {dv.feedback && (
+        <div className="border-b border-zinc-100 px-3 py-2 dark:border-zinc-800" data-testid="docverify-feedback">
+          <p className="text-[11px] font-medium text-sky-700 dark:text-sky-300">Mathematical feedback (AI commentary — not a verdict)</p>
+          <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">
+            <Markdown content={dv.feedback} />
+          </div>
+        </div>
+      )}
 
       {findings.length === 0 ? (
         <p className="px-3 py-3 text-xs text-emerald-600 dark:text-emerald-400">
@@ -149,6 +173,7 @@ function DocumentVerificationView({ dv }: { dv: DocumentVerification }) {
                   <span className="font-mono text-zinc-400">
                     {b.file}:{b.lineStart}
                   </span>
+                  {b.pdfPage && <span className="rounded bg-sky-100 px-1 font-medium text-sky-700 dark:bg-sky-500/15 dark:text-sky-300">PDF p.{b.pdfPage}</span>}
                   {b.method && <span className="text-zinc-400">{b.method}</span>}
                 </div>
                 <div className="mt-2 overflow-x-auto rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 dark:border-zinc-800 dark:bg-zinc-950">

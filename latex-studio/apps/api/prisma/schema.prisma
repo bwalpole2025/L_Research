@@ -13,12 +13,35 @@ datasource db {
   extensions = [vector]
 }
 
+// App-level folder hierarchy that ORGANISES projects on Home (like documents on a
+// computer). It groups projects only — it has no projectId and never touches a
+// project's internal files/paths. A project lives in exactly one folder, or at the
+// root (folderId null = "Unfiled"). Subtree deletes go to TrashEntry (kind
+// 'project-folder', projectId null) and restore rebuilds the structure.
+model ProjectFolder {
+  id        String   @id @default(cuid())
+  parentId  String?
+  name      String
+  createdAt DateTime @default(now())
+
+  parent   ProjectFolder?  @relation("ProjectFolderChildren", fields: [parentId], references: [id], onDelete: Cascade)
+  children ProjectFolder[] @relation("ProjectFolderChildren")
+  projects Project[]
+
+  // Prevent sibling name collisions (NULL parent collisions are also checked in the route).
+  @@unique([parentId, name])
+}
+
 model Project {
   id        String   @id @default(cuid())
   name      String
   rootFile  String   @default("main.tex")
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  // Which Home folder organises this project; null = root ("Unfiled"). Purely
+  // organisational — moving a project changes only this column, never its files.
+  folderId String?
 
   // Mathcheck settings (Project settings page).
   macros      Json?
@@ -27,6 +50,9 @@ model Project {
   // AI settings (Project settings page).
   model          String @default("claude-sonnet-4-6")
   aiInstructions String @default("")
+  // Which MODEL CONNECTOR powers this project's AI: "anthropic" | "chatgpt" | "gemini".
+  // Auth is owned by the vendor CLI (no API key); see the Connectors framework.
+  aiProvider     String @default("anthropic")
 
   // Prose-check per-project custom dictionary (domain terms, names).
   customWords String[] @default([])
@@ -38,6 +64,10 @@ model Project {
   folders     Folder[]
   literature  LiteratureItem[]
   trash       TrashEntry[]
+
+  folder ProjectFolder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
+
+  @@index([folderId])
 }
 
 // Hierarchical folders for BOTH trees (one mechanism). `tree` distinguishes the
@@ -82,6 +112,9 @@ model LiteratureItem {
   abstract      String?
   extractedText String?
   extractedAt   DateTime?
+  // Provenance: which connector/source this item came from ("upload", "arxiv",
+  // "crossref", "zotero", "semantic-scholar", "google-drive", …).
+  source        String    @default("upload")
   addedAt       DateTime  @default(now())
 
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
@@ -117,14 +150,16 @@ model LibraryChunk {
 }
 
 // Soft-delete: deletes go here, not oblivion. payload holds enough to restore.
+// projectId is null for APP-LEVEL entries (kind 'project-folder'), which organise
+// projects on Home and aren't owned by any single project.
 model TrashEntry {
   id        String   @id @default(cuid())
-  projectId String
-  kind      String // 'file' | 'folder' | 'literature'
+  projectId String?
+  kind      String // 'file' | 'folder' | 'literature' | 'project-folder'
   payload   Json
   deletedAt DateTime @default(now())
 
-  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   @@index([projectId])
 }
@@ -217,4 +252,41 @@ model Snapshot {
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   @@index([projectId])
+}
+
+// Adaptive autocomplete usage. `scope` is "app" for cross-project typing habits
+// (commands, environments, snippets, packages) or a project id for document-
+// specific keys (cite keys, labels, file paths). `score` is the decayed
+// frequency+recency sum at `lastUsedAt` (see @latex-studio/shared usage scoring).
+// Local usage data only — never sent anywhere external.
+model UsageStat {
+  id          String   @id @default(cuid())
+  scope       String // "app" | <projectId>
+  key         String // "cmd:frac", "env:align", "snippet:figure", "cite:basset1888", …
+  count       Int      @default(0)
+  score       Float    @default(0)
+  firstUsedAt DateTime @default(now())
+  lastUsedAt  DateTime @default(now())
+
+  @@unique([scope, key])
+  @@index([scope])
+}
+
+// Encrypted credential vault for connectors (single row per connector). The
+// secret (OAuth token JSON, or an API key) is stored ONLY as AES-256-GCM
+// ciphertext — never plaintext, never sent to the browser. Model connectors do
+// NOT appear here: their auth is owned by the vendor CLI. See vault/ + oauth/.
+model Credential {
+  id           String    @id @default(cuid())
+  connectorId  String    @unique
+  authType     String // "oauth2" | "apiKey"
+  accountLabel String? // e.g. the connected account email (display only)
+  scopes       String[]  @default([])
+  // AES-256-GCM parts (base64). `ciphertext` holds the encrypted secret JSON.
+  ciphertext   String
+  iv           String
+  tag          String
+  lastUsedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 }

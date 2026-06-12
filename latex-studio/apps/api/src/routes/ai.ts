@@ -9,6 +9,7 @@ import type {
 } from '@latex-studio/shared';
 import { classifyAiError } from '../providers/index.js';
 import { errorText } from '../providers/errors.js';
+import { resolveModelProvider } from '../providers/registry.js';
 import { buildFixInstruction } from '../providers/prompts.js';
 import { getAiStatus, markAiError, markAiOk } from '../ai/status.js';
 import { assembleContext } from '../ai/context.js';
@@ -225,6 +226,8 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
     const { chatSystemPrompt } = await import('../providers/prompts.js');
     const system = chatSystemPrompt(project.aiInstructions, assembleContext(files, parsed.data.context));
     const messages = history.map((h) => ({ role: h.role as 'user' | 'assistant', content: h.content }));
+    // Route to the model connector this project selected (Claude/ChatGPT/Gemini).
+    const { provider, model } = await resolveModelProvider(app, project);
 
     // Stream via SSE.
     reply.hijack();
@@ -243,7 +246,7 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
     const start = Date.now();
     let assistant = '';
     try {
-      for await (const delta of app.modelProvider.chatStream({ system, messages, model: project.model }, ac.signal)) {
+      for await (const delta of provider.chatStream({ system, messages, model }, ac.signal)) {
         assistant += delta.text;
         send('token', { text: delta.text });
       }
@@ -252,7 +255,7 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
       });
       await app.prisma.chatThread.update({ where: { id: threadId }, data: { updatedAt: new Date() } });
       markAiOk();
-      await logAiCall(app, { projectId: project.id, route: 'chat', model: project.model, latencyMs: Date.now() - start, ok: true });
+      await logAiCall(app, { projectId: project.id, route: 'chat', model, latencyMs: Date.now() - start, ok: true });
       send('done', { threadId, messageId: saved.id });
     } catch (err) {
       const kind = classifyAiError(err);
@@ -263,7 +266,7 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
           .create({ data: { threadId, role: 'assistant', content: assistant } })
           .catch(() => undefined);
       }
-      await logAiCall(app, { projectId: project.id, route: 'chat', model: project.model, latencyMs: Date.now() - start, ok: false, errorKind: kind });
+      await logAiCall(app, { projectId: project.id, route: 'chat', model, latencyMs: Date.now() - start, ok: false, errorKind: kind });
       send('error', { kind, message: errorText(err) });
     } finally {
       raw.end();
@@ -280,10 +283,12 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
     if (!parsed.success) {
       return reply.code(400).send({ error: 'Invalid body', details: parsed.error.flatten() });
     }
+    const resolved = await resolveModelProvider(app, project);
     return runReplacement(app, reply, {
       projectId: project.id,
       route: 'edit',
-      model: project.model,
+      provider: resolved.provider,
+      model: resolved.model,
       instruction: parsed.data.instruction,
       selection: parsed.data.selection,
       context: parsed.data.context,
@@ -299,10 +304,12 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
     if (!parsed.success) {
       return reply.code(400).send({ error: 'Invalid body', details: parsed.error.flatten() });
     }
+    const resolved = await resolveModelProvider(app, project);
     return runReplacement(app, reply, {
       projectId: project.id,
       route: 'fix',
-      model: project.model,
+      provider: resolved.provider,
+      model: resolved.model,
       instruction: buildFixInstruction(parsed.data.diagnostic.message, parsed.data.diagnostic.line, parsed.data.logExcerpt),
       selection: parsed.data.region,
       context: '',
@@ -370,6 +377,7 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
 interface ReplacementInput {
   projectId: string;
   route: 'edit' | 'fix';
+  provider: ModelProvider;
   model: string;
   instruction: string;
   selection: string;
@@ -384,12 +392,17 @@ async function runReplacement(
   const start = Date.now();
   const ac = new AbortController();
   try {
-    const replacement = await app.modelProvider.editRegion(
+    const replacement = await input.provider.editRegion(
       { instruction: input.instruction, selection: input.selection, context: input.context, model: input.model },
       ac.signal,
     );
     markAiOk();
     await logAiCall(app, { projectId: input.projectId, route: input.route, model: input.model, latencyMs: Date.now() - start, ok: true });
+    // Fixes: the model may decline rather than guess — no diff is shown for NO_FIX.
+    if (input.route === 'fix' && (/^NO_FIX$/i.test(replacement.trim()) || replacement.trim() === '')) {
+      const body: ReplacementResponse = { replacement: '', noFix: true };
+      return body;
+    }
     const body: ReplacementResponse = { replacement };
     return body;
   } catch (err) {

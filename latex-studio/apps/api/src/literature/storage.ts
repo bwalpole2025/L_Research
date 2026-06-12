@@ -33,6 +33,8 @@ export interface PdfExtraction {
   pageCount: number;
   title: string;
   author: string;
+  /** Char offset where each 1-based page begins in `text` (for chunk provenance). */
+  pageOffsets: { page: number; charStart: number }[];
 }
 
 /** Extract full text + offline metadata via the mathcheck PyMuPDF route. */
@@ -44,9 +46,15 @@ export async function extractViaMathcheck(mathcheckUrl: string, base64: string):
       body: JSON.stringify({ pdf_base64: base64 }),
     });
     const data = (await res.json()) as Partial<PdfExtraction>;
-    return { text: data.text ?? '', pageCount: data.pageCount ?? 0, title: data.title ?? '', author: data.author ?? '' };
+    return {
+      text: data.text ?? '',
+      pageCount: data.pageCount ?? 0,
+      title: data.title ?? '',
+      author: data.author ?? '',
+      pageOffsets: Array.isArray(data.pageOffsets) ? data.pageOffsets : [],
+    };
   } catch {
-    return { text: '', pageCount: 0, title: '', author: '' };
+    return { text: '', pageCount: 0, title: '', author: '', pageOffsets: [] };
   }
 }
 

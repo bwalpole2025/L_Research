@@ -3,14 +3,19 @@ import { z } from 'zod';
 import { classifyAiError } from '../providers/index.js';
 import { errorText } from '../providers/errors.js';
 import { markAiError, markAiOk } from '../ai/status.js';
+import { readFile, writeFile } from 'node:fs/promises';
 import { assembleBundle } from '../coderive/context.js';
 import { runCoderive } from '../coderive/engine.js';
-import { runDocumentVerification } from '../coderive/document.js';
+import { resolveModelProvider } from '../providers/registry.js';
+import { extractPdfContext, runDocumentVerification, type PdfContext } from '../coderive/document.js';
 import { collectMacros } from '../docmodel/build.js';
 import { looksLikeMath } from '../coderive/anchors.js';
 import type { RefFile } from '../coderive/references.js';
 import { loadLibraryResolver } from '../literature/refs.js';
-import type { CoderiveResponse } from '@latex-studio/shared';
+import { mapFindingsToPdf } from '../review/coords.js';
+import { resolveAndPersistRoot } from '../compile/rootResolve.js';
+import { annotatePdf } from '../review/annotate.js';
+import type { CoderiveResponse, ReviewFinding } from '@latex-studio/shared';
 
 const coderiveBody = z.object({
   fileId: z.string().optional(),
@@ -31,6 +36,9 @@ export async function coderiveRoutes(app: FastifyInstance): Promise<void> {
     if (!project) return reply.callNotFound();
     const parsed = coderiveBody.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'Invalid body', details: parsed.error.flatten() });
+
+    // The model only PROPOSES; SymPy decides. Route to the project's connector.
+    const { provider: modelProvider, model: aiModel } = await resolveModelProvider(app, project);
 
     const macros = (project.macros as Record<string, string> | null) ?? {};
 
@@ -75,21 +83,124 @@ export async function coderiveRoutes(app: FastifyInstance): Promise<void> {
       request.raw.on('close', () => ac.abort());
       const start = Date.now();
       try {
+        // 1. COMPILE FIRST — the check is on the document as compiled, not stale
+        //    state. If the configured root is missing, fall back to the next
+        //    available .tex document (persisted, same rule as the compile route).
+        const resolvedRoot = await resolveAndPersistRoot(app.prisma, project.id, project.rootFile, files);
+        const rootFile = resolvedRoot.rootFile;
+        sse('progress', {
+          stage: resolvedRoot.fellBack
+            ? resolvedRoot.reason === 'pristine-seed'
+              ? `"${project.rootFile}" is the untouched starter template — compiling "${rootFile}"`
+              : `root "${project.rootFile}" not found — compiling "${rootFile}"`
+            : 'compiling the document',
+        });
+        const compileRes = await app.compileService
+          .compile({ projectId: project.id, rootFile, files })
+          .catch(() => null);
+        if (compileRes && compileRes.status !== 'success') {
+          sse('progress', { stage: `compile ${compileRes.status} — checking against the last good PDF` });
+        }
+
+        // 2. SCAN THE COMPILED PDF — extract its rendered text + page map, so the
+        //    AI reads the document as compiled, and findings anchor to PDF pages.
+        const pdfPath = app.compileService.pdfPath(project.id, rootFile);
+        let pdfB64: string | null = null;
+        try {
+          pdfB64 = (await readFile(pdfPath)).toString('base64');
+        } catch {
+          pdfB64 = null;
+        }
+        let pdf: PdfContext | undefined;
+        if (pdfB64) {
+          sse('progress', { stage: 'scanning the compiled PDF' });
+          pdf = (await extractPdfContext(app.config.mathcheckUrl, pdfB64)) ?? undefined;
+        }
+
+        // 3. VERIFY (SymPy) + AI mathematical feedback grounded in the PDF.
         const documentVerification = await runDocumentVerification(
           texFiles,
           {
             mathcheckUrl: app.config.mathcheckUrl,
             macros: docMacros,
             assumptions: project.assumptions,
-            modelProvider: app.modelProvider,
-            model: project.model,
+            modelProvider,
+            model: aiModel,
+            ...(pdf ? { pdf } : {}),
+            locatePage: async (file, line) => {
+              try {
+                const r = await app.compileService.forward(project.id, rootFile, file, line);
+                return r.boxes[0]?.page ?? null;
+              } catch {
+                return null;
+              }
+            },
             onProgress: (stage) => sse('progress', { stage }),
           },
           ac.signal,
         );
+
+        // 4. ANNOTATE the PDF — always, so SymPy's verdicts and the AI's comments
+        //    land on the compiled paper itself: refuted equations are light-green
+        //    highlights, AI-commented equations are grey highlights whose popups
+        //    carry the comment, and the overall mathematical feedback is appended
+        //    as its own page(s).
+        if (pdfB64) {
+          const commentById = new Map(documentVerification.comments.map((c) => [c.id, c.comment]));
+          const findings: ReviewFinding[] = [];
+          for (const b of documentVerification.report.blocks) {
+            const comment = commentById.get(b.id);
+            if (b.verdict === 'failing') {
+              findings.push({
+                id: `verify:${b.id}`,
+                axis: 'maths',
+                category: 'algebra',
+                severity: 'error',
+                confidence: 'refuted',
+                file: b.file,
+                lineSpan: { fromLine: b.lineStart, toLine: b.lineEnd },
+                message:
+                  `Algebra error: this step is not algebraically equal to the previous one (SymPy: ${b.method ?? 'refuted'}).` +
+                  (comment ? `\nAI context (not a verdict): ${comment}` : ''),
+                ...(b.counterexample ? { counterexample: b.counterexample } : {}),
+              });
+            } else if (comment) {
+              findings.push({
+                id: `verify:${b.id}`,
+                axis: 'maths',
+                category: 'algebra',
+                severity: 'info',
+                confidence: 'unknown',
+                file: b.file,
+                lineSpan: { fromLine: b.lineStart, toLine: b.lineEnd },
+                message: `SymPy could not decide this equation (${b.method ?? 'unknown'}).\nAI context (not a verdict): ${comment}`,
+              });
+            }
+          }
+          const feedback = documentVerification.feedback ?? '';
+          if (findings.length > 0 || feedback.trim()) {
+            sse('progress', { stage: 'writing the annotated PDF' });
+            const coords = await mapFindingsToPdf(findings, (file, line) =>
+              app.compileService.forward(project.id, rootFile, file, line),
+            );
+            const annotated = await annotatePdf(
+              app.config.mathcheckUrl,
+              pdfB64,
+              findings,
+              coords,
+              feedback.trim()
+                ? { title: 'Mathematical feedback — AI commentary, not a verdict', text: feedback }
+                : undefined,
+            );
+            if (annotated) {
+              await writeFile(pdfPath.replace(/\.pdf$/, '.review.pdf'), Buffer.from(annotated.pdfBase64, 'base64'));
+              documentVerification.verifyPdfUrl = `/projects/${project.id}/review-pdf?rev=${Date.now()}`;
+            }
+          }
+        }
         markAiOk();
         await app.prisma.aiCallLog
-          .create({ data: { projectId: project.id, route: 'coderive', model: project.model, latencyMs: Date.now() - start, ok: true } })
+          .create({ data: { projectId: project.id, route: 'coderive', model: aiModel, latencyMs: Date.now() - start, ok: true } })
           .catch(() => undefined);
         const response: CoderiveResponse = {
           intent: 'verify-document',
@@ -105,7 +216,7 @@ export async function coderiveRoutes(app: FastifyInstance): Promise<void> {
         const kind = classifyAiError(err);
         markAiError(kind);
         await app.prisma.aiCallLog
-          .create({ data: { projectId: project.id, route: 'coderive', model: project.model, latencyMs: Date.now() - start, ok: false, errorKind: kind } })
+          .create({ data: { projectId: project.id, route: 'coderive', model: aiModel, latencyMs: Date.now() - start, ok: false, errorKind: kind } })
           .catch(() => undefined);
         sse('error', { kind, message: errorText(err) });
       } finally {
@@ -188,23 +299,23 @@ export async function coderiveRoutes(app: FastifyInstance): Promise<void> {
         bundle,
         anchors,
         {
-          modelProvider: app.modelProvider,
+          modelProvider,
           mathcheckUrl: app.config.mathcheckUrl,
-          model: project.model,
+          model: aiModel,
           onRound: (r) => sse('round', r),
         },
         ac.signal,
       );
       markAiOk();
       await app.prisma.aiCallLog
-        .create({ data: { projectId: project.id, route: 'coderive', model: project.model, latencyMs: Date.now() - start, ok: true } })
+        .create({ data: { projectId: project.id, route: 'coderive', model: aiModel, latencyMs: Date.now() - start, ok: true } })
         .catch(() => undefined);
       sse('result', result);
     } catch (err) {
       const kind = classifyAiError(err);
       markAiError(kind);
       await app.prisma.aiCallLog
-        .create({ data: { projectId: project.id, route: 'coderive', model: project.model, latencyMs: Date.now() - start, ok: false, errorKind: kind } })
+        .create({ data: { projectId: project.id, route: 'coderive', model: aiModel, latencyMs: Date.now() - start, ok: false, errorKind: kind } })
         .catch(() => undefined);
       sse('error', { kind, message: errorText(err) });
     } finally {

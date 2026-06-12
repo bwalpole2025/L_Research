@@ -55,6 +55,33 @@ export interface AppConfig {
   languageToolUrl: string;
   /** Postgres connection string (used by Prisma). */
   databaseUrl: string;
+
+  // ─── Connectors framework ──────────────────────────────────────────────────
+  /**
+   * Fallback master key for the credential vault when the OS keychain is
+   * unavailable (Docker/headless/CI). The keychain is preferred; this env key
+   * keeps those paths bootable. Empty ⇒ rely on the keychain only.
+   */
+  connectorsMasterKey: string;
+  /**
+   * Public base URL the api is reachable at, for OAuth redirect URIs
+   * (`<base>/connectors/:id/callback`). Defaults to the localhost bind.
+   */
+  oauthRedirectBaseUrl: string;
+  /** Where the web app lives — the OAuth callback redirects back here. */
+  webBaseUrl: string;
+  /** OAuth client credentials (the user registers these apps; never logged). */
+  googleOAuthClientId: string;
+  googleOAuthClientSecret: string;
+  notionOAuthClientId: string;
+  notionOAuthClientSecret: string;
+  dropboxOAuthClientId: string;
+  dropboxOAuthClientSecret: string;
+  onedriveOAuthClientId: string;
+  onedriveOAuthClientSecret: string;
+  /** Optional API keys for literature sources (stored via the vault when set in UI). */
+  zoteroApiKey: string;
+  semanticScholarApiKey: string;
 }
 
 /** Repo root, derived from this module's location (independent of cwd). */
@@ -80,5 +107,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     completionWarmIdleMs: Number.parseInt(env.COMPLETION_WARM_IDLE_MS ?? '600000', 10),
     languageToolUrl: env.LANGUAGETOOL_URL ?? '',
     databaseUrl: env.DATABASE_URL ?? '',
+    connectorsMasterKey: env.CONNECTORS_MASTER_KEY ?? '',
+    oauthRedirectBaseUrl: env.OAUTH_REDIRECT_BASE_URL ?? `http://127.0.0.1:${Number.parseInt(env.API_PORT ?? '4000', 10)}`,
+    webBaseUrl: env.WEB_BASE_URL ?? 'http://127.0.0.1:3000',
+    googleOAuthClientId: env.GOOGLE_OAUTH_CLIENT_ID ?? '',
+    googleOAuthClientSecret: env.GOOGLE_OAUTH_CLIENT_SECRET ?? '',
+    notionOAuthClientId: env.NOTION_OAUTH_CLIENT_ID ?? '',
+    notionOAuthClientSecret: env.NOTION_OAUTH_CLIENT_SECRET ?? '',
+    dropboxOAuthClientId: env.DROPBOX_OAUTH_CLIENT_ID ?? '',
+    dropboxOAuthClientSecret: env.DROPBOX_OAUTH_CLIENT_SECRET ?? '',
+    onedriveOAuthClientId: env.ONEDRIVE_OAUTH_CLIENT_ID ?? '',
+    onedriveOAuthClientSecret: env.ONEDRIVE_OAUTH_CLIENT_SECRET ?? '',
+    zoteroApiKey: env.ZOTERO_API_KEY ?? '',
+    semanticScholarApiKey: env.SEMANTIC_SCHOLAR_API_KEY ?? '',
   };
 }

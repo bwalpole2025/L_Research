@@ -59,7 +59,7 @@ async function openDiff(page: Page) {
 
 test('Cmd+K → Accept applies the replacement', async ({ page }) => {
   await mockApi(page);
-  await page.goto('/');
+  await page.goto('/studio');
   await openDiff(page);
 
   await page.getByTestId('diff-accept').click();
@@ -71,7 +71,7 @@ test('Cmd+K → Accept applies the replacement', async ({ page }) => {
 
 test('Cmd+K → Reject leaves the document unchanged', async ({ page }) => {
   await mockApi(page);
-  await page.goto('/');
+  await page.goto('/studio');
   await openDiff(page);
 
   await page.getByTestId('diff-reject').click();

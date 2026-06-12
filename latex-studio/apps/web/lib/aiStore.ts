@@ -28,6 +28,9 @@ export interface PendingDiff {
   /** For a forced unverified/unknown co-derive insert: underline `warnText` with this tooltip on accept. */
   unverifiedMessage?: string;
   warnText?: string;
+  /** Fixes: the diagnostic line this diff anchors at — used to re-validate the
+   *  remaining queued fixes' line numbers after this one is applied. */
+  anchorLine?: number;
 }
 
 const KIND_MESSAGES: Record<AiErrorKind, string> = {
@@ -60,6 +63,15 @@ interface AiState {
   pendingDiff: PendingDiff | null;
   lastError: string | null;
 
+  /** "AI error fixes" master toggle — off removes every Suggest-fix action. */
+  errorFixesEnabled: boolean;
+  /** Remaining diagnostics of a "Fix all errors" run (offered one at a time). */
+  fixQueue: Diagnostic[];
+  /** Non-error notice from the fix flow (e.g. the model declined to guess). */
+  fixNotice: string | null;
+  /** Offer a manual recompile after an accepted fix (when compile-on-save is off). */
+  offerRecompile: boolean;
+
   refreshStatus: () => Promise<void>;
   loadModels: () => Promise<void>;
   toggleChat: () => void;
@@ -77,6 +89,11 @@ interface AiState {
   cancelInlineEdit: () => void;
   submitInlineEdit: (instruction: string) => Promise<void>;
   requestFix: (diagnostic: Diagnostic) => Promise<void>;
+  /** Queue every error diagnostic; each fix is approved independently, and the
+   *  remaining regions are re-validated (line-shifted) after each accept. */
+  suggestAllFixes: () => Promise<void>;
+  setErrorFixesEnabled: (v: boolean) => void;
+  clearRecompileOffer: () => void;
 
   openDiff: (diff: PendingDiff) => void;
   acceptDiff: () => void;
@@ -137,6 +154,10 @@ export const useAiStore = create<AiState>((set, get) => {
     editBusy: false,
     pendingDiff: null,
     lastError: null,
+    errorFixesEnabled: typeof window === 'undefined' || window.localStorage.getItem('latex-studio:error-fixes') !== 'false',
+    fixQueue: [],
+    fixNotice: null,
+    offerRecompile: false,
 
     async refreshStatus() {
       try {
@@ -304,6 +325,7 @@ export const useAiStore = create<AiState>((set, get) => {
     async requestFix(diagnostic) {
       const editor = useEditorStore.getState();
       const { projectId } = editor;
+      if (!get().errorFixesEnabled) return; // master toggle: no fix calls at all
       if (!projectId || diagnostic.line === undefined || !get().status.available) return;
 
       const rootFile = editor.projects.find((p) => p.id === projectId)?.rootFile ?? 'main.tex';
@@ -341,8 +363,15 @@ export const useAiStore = create<AiState>((set, get) => {
           logExcerpt,
         });
         markOk();
+        // The model declined rather than guessed — say so, show NO diff.
+        if (res.noFix || !res.replacement.trim()) {
+          set({ editBusy: false, fixNotice: `No confident fix for "${diagnostic.message.slice(0, 80)}" — nothing proposed.` });
+          void get().suggestAllFixes(); // continue with the rest of a queued run
+          return;
+        }
         set({
           editBusy: false,
+          fixNotice: null,
           pendingDiff: {
             from: region.from,
             to: region.to,
@@ -350,14 +379,44 @@ export const useAiStore = create<AiState>((set, get) => {
             replacement: res.replacement,
             source: 'fix',
             filePath: path,
+            ...(diagnostic.line !== undefined ? { anchorLine: diagnostic.line } : {}),
           },
         });
       } catch (err) {
-        set({ editBusy: false });
+        set({ editBusy: false, fixQueue: [] });
         if (err instanceof AiError) recordError(err.kind, err.message);
         else set({ lastError: 'Fix failed.' });
       }
     },
+
+    // "Suggest fixes for all errors": queue every error diagnostic; offer ONE diff
+    // at a time. Each is approved independently; after an accept the remaining
+    // queued lines are re-validated (shifted by the applied change's line delta)
+    // before the next region is captured.
+    async suggestAllFixes() {
+      if (!get().errorFixesEnabled || get().pendingDiff) return;
+      let queue = get().fixQueue;
+      if (queue.length === 0) {
+        queue = useEditorStore
+          .getState()
+          .diagnostics.filter((d) => d.severity === 'error' && d.line !== undefined);
+        if (queue.length === 0) return;
+      }
+      const [next, ...rest] = queue;
+      set({ fixQueue: rest });
+      await get().requestFix(next!);
+    },
+
+    setErrorFixesEnabled(v) {
+      try {
+        window.localStorage.setItem('latex-studio:error-fixes', String(v));
+      } catch {
+        /* ignore */
+      }
+      set({ errorFixesEnabled: v, ...(v ? {} : { fixQueue: [], fixNotice: null }) });
+    },
+
+    clearRecompileOffer: () => set({ offerRecompile: false }),
 
     openDiff(diff: PendingDiff) {
       set({ pendingDiff: diff });
@@ -372,10 +431,30 @@ export const useAiStore = create<AiState>((set, get) => {
         editorController.markUnverified(diff.warnText, diff.unverifiedMessage);
       }
       set({ pendingDiff: null });
+
+      if (diff.source === 'fix') {
+        // Re-validate the queued fixes: shift line numbers below the applied
+        // change by its line delta, so the next region is captured correctly.
+        const delta = diff.replacement.split('\n').length - diff.original.split('\n').length;
+        if (delta !== 0 && diff.anchorLine !== undefined) {
+          set((s) => ({
+            fixQueue: s.fixQueue.map((d) =>
+              d.line !== undefined && d.line > diff.anchorLine! ? { ...d, line: d.line + delta } : d,
+            ),
+          }));
+        }
+        // Offer a manual recompile so the user can see whether the error cleared
+        // (compile-on-save users already get one automatically via the save path).
+        if (!useEditorStore.getState().compileOnSave) set({ offerRecompile: true });
+        if (get().fixQueue.length > 0) void get().suggestAllFixes();
+      }
     },
 
     rejectDiff() {
+      const diff = get().pendingDiff;
       set({ pendingDiff: null });
+      // Reject leaves the document untouched; a queued run simply moves on.
+      if (diff?.source === 'fix' && get().fixQueue.length > 0) void get().suggestAllFixes();
     },
 
     insertAtCursor(text) {

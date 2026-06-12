@@ -16,7 +16,7 @@ export function EditorTabs() {
 
   return (
     <div
-      className="flex h-10 items-end overflow-x-auto border-b border-zinc-200 bg-[var(--ls-surface-muted)] px-1.5 pt-1.5 dark:border-zinc-800"
+      className="flex h-10 items-stretch overflow-x-auto border-b border-[var(--ls-line)] bg-[var(--ls-editor-bg)] px-1.5"
       role="tablist"
     >
       {openFileIds.map((id) => {
@@ -30,10 +30,10 @@ export function EditorTabs() {
             role="tab"
             aria-selected={active}
             onMouseDown={() => setActive(id)}
-            className={`group flex h-8 max-w-[220px] cursor-pointer items-center gap-2 rounded-t-md border border-b-0 px-2.5 text-xs transition-colors ${
+            className={`group flex max-w-[220px] cursor-pointer items-center gap-2 border-b-2 px-3 text-[13px] transition-colors ${
               active
-                ? 'border-zinc-200 bg-[var(--ls-editor-bg)] text-zinc-950 shadow-[0_-1px_0_rgba(18,25,38,0.02)] dark:border-zinc-800 dark:text-zinc-50'
-                : 'border-transparent text-zinc-500 hover:bg-white/70 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-900/80 dark:hover:text-zinc-100'
+                ? 'border-[#4e68f5] text-zinc-950 dark:text-white'
+                : 'border-transparent text-zinc-500 hover:text-zinc-900 dark:text-[#707b99] dark:hover:text-[#c6cde0]'
             }`}
             title={file.path}
             data-testid={`tab-${file.path}`}

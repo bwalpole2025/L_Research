@@ -1,5 +1,5 @@
-import { EditorApp } from '@/components/EditorApp';
+import { Landing } from '@/components/Landing';
 
 export default function HomePage() {
-  return <EditorApp />;
+  return <Landing />;
 }

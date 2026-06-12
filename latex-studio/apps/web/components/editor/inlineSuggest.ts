@@ -1,6 +1,6 @@
 'use client';
 
-import { Facet, Prec, StateEffect, StateField, type Extension } from '@codemirror/state';
+import { Facet, Prec, StateEffect, StateField, type EditorState, type Extension } from '@codemirror/state';
 import {
   Decoration,
   type DecorationSet,
@@ -10,6 +10,7 @@ import {
   WidgetType,
   keymap,
 } from '@codemirror/view';
+import { completionStatus } from '@codemirror/autocomplete';
 import type { CompletionMode } from '@/lib/types';
 
 export interface Suggestion {
@@ -92,13 +93,32 @@ const suggestionField = StateField.define<Suggestion | null>({
     }
     return value;
   },
-  provide: (f) =>
-    EditorView.decorations.from(f, (s) =>
-      s && s.text
-        ? Decoration.set([Decoration.widget({ widget: new GhostWidget(s.text), side: 1 }).range(s.from)])
-        : Decoration.none,
-    ),
 });
+
+/**
+ * Ghost rendering, suppressed while the autocomplete DROPDOWN is open — the
+ * defined precedence: dropdown open → it owns the screen and the keys; dropdown
+ * closed/dismissed → the ghost resumes (its suggestion survives in the field).
+ */
+function ghostDecorations(state: EditorState): DecorationSet {
+  const s = state.field(suggestionField, false);
+  if (!s || !s.text) return Decoration.none;
+  if (completionStatus(state) !== null) return Decoration.none;
+  return Decoration.set([Decoration.widget({ widget: new GhostWidget(s.text), side: 1 }).range(s.from)]);
+}
+
+const ghostRenderPlugin = ViewPlugin.fromClass(
+  class {
+    decorations: DecorationSet;
+    constructor(view: EditorView) {
+      this.decorations = ghostDecorations(view.state);
+    }
+    update(u: ViewUpdate): void {
+      this.decorations = ghostDecorations(u.state);
+    }
+  },
+  { decorations: (v) => v.decorations },
+);
 
 // ── Amber verification underline (fire-and-forget math check) ────────────────
 
@@ -127,6 +147,8 @@ const warnField = StateField.define<DecorationSet>({
 // ── Commands ─────────────────────────────────────────────────────────────────
 
 function acceptCmd(view: EditorView): boolean {
+  // Precedence: an open/pending dropdown owns Tab (accept item / snippet stop).
+  if (completionStatus(view.state) !== null) return false;
   const s = view.state.field(suggestionField, false);
   if (!s || !s.text) return false;
   view.dispatch({
@@ -140,6 +162,8 @@ function acceptCmd(view: EditorView): boolean {
 }
 
 function dismissCmd(view: EditorView): boolean {
+  // An open dropdown owns Esc (closes the dropdown; the ghost then resumes).
+  if (completionStatus(view.state) !== null) return false;
   const s = view.state.field(suggestionField, false);
   if (!s) return false;
   view.dispatch({ effects: setSuggestionEffect.of(null) });
@@ -185,6 +209,7 @@ export function inlineSuggestion(config: InlineSuggestConfig): Extension {
   return [
     configFacet.of(config),
     suggestionField,
+    ghostRenderPlugin,
     warnField,
     ghostTheme,
     Prec.highest(

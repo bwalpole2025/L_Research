@@ -4,12 +4,16 @@ import { oneDark } from '@codemirror/theme-one-dark';
 import type { Extension } from '@codemirror/state';
 import type { Theme } from '@/lib/types';
 
+/** Shared with the autocomplete tooltip so completions align with the text. */
+export const EDITOR_FONT_FAMILY =
+  '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+export const EDITOR_FONT_SIZE = '13.5px';
+
 /** Editor font + sizing, applied last so it wins over theme presets. */
 const fontTheme = EditorView.theme({
-  '&': { height: '100%', fontSize: '13.5px' },
+  '&': { height: '100%', fontSize: EDITOR_FONT_SIZE },
   '.cm-scroller': {
-    fontFamily:
-      '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+    fontFamily: EDITOR_FONT_FAMILY,
     lineHeight: '1.65',
   },
   '.cm-content': { padding: '12px 0' },

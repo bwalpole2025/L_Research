@@ -1,5 +1,12 @@
 /** File-type helpers shared by the file tree, upload, and editor preview. */
 
+/** One file queued for upload, with its path relative to the drop/pick root
+ *  (e.g. `thesis/ch1/fig.png`). Empty `relativePath` ⇒ a single top-level file. */
+export interface UploadItem {
+  file: File;
+  relativePath: string;
+}
+
 export const TEXT_EXTENSIONS = ['.tex', '.bib', '.bst', '.sty', '.cls', '.clo', '.txt', '.md', '.csv'];
 export const BINARY_EXTENSIONS = [
   '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tiff', '.tif', '.ico', '.svg',
@@ -45,6 +52,24 @@ export function mimeForPath(path: string): string {
 /** Sanitise a filename into a single valid path segment. */
 export function sanitiseSegment(name: string): string {
   return name.replace(/[^A-Za-z0-9._ -]+/g, '-').replace(/^-+|-+$/g, '') || 'file';
+}
+
+/**
+ * Destination path for an uploaded file, preserving folder structure.
+ *
+ * Folder uploads (`<input webkitdirectory>`) give each File a
+ * `webkitRelativePath` like `figures/sub/plot.png`; plain file uploads leave it
+ * empty, so we fall back to the bare name. Every segment is sanitised and the
+ * result is nested under the chosen target directory.
+ */
+export function uploadTargetPath(targetDir: string, relativePath: string): string {
+  const segments = relativePath
+    .split('/')
+    .filter((s) => s !== '' && s !== '.' && s !== '..')
+    .map(sanitiseSegment);
+  const rel = segments.join('/') || 'file';
+  const dir = targetDir.replace(/\/+$/, '');
+  return dir ? `${dir}/${rel}` : rel;
 }
 
 /** Read a File as base64 (no data: prefix). */

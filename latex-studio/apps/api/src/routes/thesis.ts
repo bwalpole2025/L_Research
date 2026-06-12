@@ -305,7 +305,7 @@ export async function thesisRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const compileErrors = compile.diagnostics.filter((d) => d.severity === 'error').length;
-    const compileWarnings = compile.diagnostics.filter((d) => d.severity === 'warning').length;
+    const compileWarnings = compile.diagnostics.filter((d) => d.severity.startsWith('warning')).length;
     const summary: PreSubmitSummary = {
       projectName: project.name,
       generatedAt: new Date().toISOString(),

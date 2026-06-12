@@ -22,18 +22,23 @@ SEV_ORDER = {"error": 0, "warning": 1, "info": 2}
 
 LEGEND_ROWS = [
     ((0.53, 0.94, 0.67), "light green", "Wrong equation — SymPy-verified algebra error (machine-checked)."),
-    ((0.61, 0.64, 0.69), "grey", "Maths SymPy could not decide (unknown) — NOT an error and NOT a pass."),
+    ((0.94, 0.27, 0.27), "red", "Broken cross-reference / \\cite — deterministic (machine-checked)."),
     ((0.94, 0.27, 0.27), "red underline", "Wrong grammar/spelling — deterministic en-GB check (reliable)."),
+    ((0.98, 0.45, 0.09), "orange", "RAG discrepancy — a retrieved library passage conflicts (quoted in popup); confirm vs source."),
     ((0.99, 0.90, 0.54), "light yellow", "Wrong statement — LLM judgement; verify against the source (may be wrong)."),
+    ((0.61, 0.64, 0.69), "grey", "Unverified note (unknown maths / no library source) — NOT an error, NOT a pass."),
 ]
 
 HONESTY = [
-    "Only GREEN (algebra) and RED (spelling/grammar) are machine-verified. YELLOW statements are",
-    "LLM judgements that may be wrong in either direction — false alarms AND missed errors. Check them.",
+    "GREEN (algebra) and RED (referencing, spelling) are machine-verified. ORANGE discrepancies are",
+    "grounded in a passage RETRIEVED from your local library — the evidence is quoted in the popup;",
+    "confirm against the source. YELLOW is LLM judgement that may be wrong either way.",
     "",
-    "No GREEN means SymPy found no algebra error in what it could parse — NOT that the document is",
-    "correct. 'unknown' (grey) maths and unavailable references are reported as such, never silently",
-    "treated as fine. Highlights mark where to look; apply any correction yourself, with approval.",
+    "The model may NOT assert a physics or citation discrepancy without a retrieved passage:",
+    "'no source in library' is reported as such — never as an error, never as a silent pass.",
+    "A clean check means SymPy found no algebra error in what it could parse and nothing in the",
+    "library contradicts the prose checked — NOT that the document is correct. Retrieval is over",
+    "the local library only; no web is consulted, and reference text never reaches SymPy.",
 ]
 
 
@@ -92,7 +97,36 @@ def _index_pages(doc: fitz.Document, findings: list[dict[str, Any]], targets: di
     return first_index
 
 
-def annotate_pdf(pdf_b64: str, findings: list[dict[str, Any]]) -> dict[str, Any]:
+def _summary_pages(doc: fitz.Document, summary: dict[str, Any]) -> None:
+    """Append the AI's overall feedback as wrapped text page(s) — clearly labelled
+    commentary, never a verdict."""
+    title = str(summary.get("title", "Feedback"))
+    text = str(summary.get("text", "")).strip()
+    if not text:
+        return
+    remaining = text
+    first = True
+    while remaining:
+        page = doc.new_page(-1, width=A4[0], height=A4[1])
+        y = 56
+        if first:
+            page.insert_text((40, y), title, fontsize=15)
+            y += 30
+            first = False
+        box = fitz.Rect(40, y, A4[0] - 40, A4[1] - 56)
+        leftover = page.insert_textbox(box, remaining, fontsize=10, color=(0.1, 0.1, 0.1), lineheight=1.45)
+        if leftover >= 0:  # everything fitted
+            break
+        # insert_textbox returns a negative number when text overflows; PyMuPDF
+        # gives no split point, so estimate by character budget and continue.
+        approx_chars = int((box.height / (10 * 1.45)) * (box.width / 5.2))
+        cut = remaining.rfind(" ", 0, max(approx_chars, 200))
+        if cut <= 0:
+            break
+        remaining = remaining[cut + 1 :]
+
+
+def annotate_pdf(pdf_b64: str, findings: list[dict[str, Any]], summary: dict[str, Any] | None = None) -> dict[str, Any]:
     doc = fitz.open(stream=base64.b64decode(pdf_b64), filetype="pdf")
     n_content = doc.page_count
 
@@ -124,6 +158,8 @@ def annotate_pdf(pdf_b64: str, findings: list[dict[str, Any]]) -> dict[str, Any]
                 targets[f["id"]] = (pno, fitz.Point(rect.x0, max(0.0, rect.y0 - 6)))
 
     _legend_page(doc)
+    if summary:
+        _summary_pages(doc, summary)
     first_index = _index_pages(doc, findings, targets)
 
     # Back-link every highlight to the top of the index.

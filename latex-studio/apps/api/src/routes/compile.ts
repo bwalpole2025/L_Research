@@ -3,6 +3,7 @@ import { stat } from 'node:fs/promises';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import type { CompileService } from '../compile/service.js';
+import { resolveAndPersistRoot } from '../compile/rootResolve.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -40,6 +41,18 @@ async function sendFile(reply: FastifyReply, path: string, contentType: string):
 }
 
 export async function compileRoutes(app: FastifyInstance): Promise<void> {
+  /** Latest compile outcome (dashboard badge): green/orange/red at a glance. */
+  app.get<{ Params: { id: string } }>('/projects/:id/compile-status', async (request, reply) => {
+    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
+    if (!project) return reply.callNotFound();
+    const last = await app.prisma.compileLog.findFirst({
+      where: { projectId: project.id },
+      orderBy: { createdAt: 'desc' },
+      select: { status: true, createdAt: true },
+    });
+    return last ? { status: last.status, at: last.createdAt.toISOString() } : { status: null };
+  });
+
   const svc = app.compileService;
 
   // Compile a project (queued one-per-project).
@@ -52,11 +65,28 @@ export async function compileRoutes(app: FastifyInstance): Promise<void> {
       select: { path: true, content: true, encoding: true },
     });
 
+    // If the configured root (e.g. "main.tex") doesn't exist, fall back to the
+    // next available .tex document and persist it as the project root so PDF
+    // serving, SyncTeX, review and verify all agree.
+    const resolved = await resolveAndPersistRoot(app.prisma, project.id, project.rootFile, files);
+
     const result = await svc.compile({
       projectId: project.id,
-      rootFile: project.rootFile,
+      rootFile: resolved.rootFile,
       files,
     });
+
+    if (resolved.fellBack && result.status !== 'superseded') {
+      result.diagnostics.unshift({
+        severity: 'warning-important',
+        message:
+          resolved.reason === 'pristine-seed'
+            ? `"${project.rootFile}" is the untouched starter template — compiled your document "${resolved.rootFile}" instead and set it as the project root (change it in Settings).`
+            : `Root file "${project.rootFile}" not found — compiled "${resolved.rootFile}" instead and set it as the project root (change it in Settings).`,
+        file: resolved.rootFile,
+        line: 1,
+      });
+    }
 
     if (result.status !== 'superseded') {
       await app.prisma.compileLog
