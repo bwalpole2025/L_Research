@@ -24,6 +24,7 @@ import { libraryRoutes } from './routes/library.js';
 import { docmodelRoutes } from './routes/docmodel.js';
 import { previewRoutes } from './routes/preview.js';
 import { usageRoutes } from './routes/usage.js';
+import { diagramRoutes } from './routes/diagram.js';
 import { connectorRoutes } from './routes/connectors.js';
 import { Vault } from './vault/vault.js';
 
@@ -94,6 +95,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await app.register(docmodelRoutes);
   await app.register(previewRoutes);
   await app.register(usageRoutes);
+  await app.register(diagramRoutes);
   await app.register(connectorRoutes);
 
   return app;

@@ -39,7 +39,11 @@ export class RunManager {
     let cancelled = false;
     let timedOut = false;
 
-    const proc = streamProcess(plan.command, plan.argv, handlers, { killGroup: plan.killGroup, ...(plan.cwd ? { cwd: plan.cwd } : {}) });
+    const proc = streamProcess(plan.command, plan.argv, handlers, {
+      killGroup: plan.killGroup,
+      ...(plan.cwd ? { cwd: plan.cwd } : {}),
+      ...(plan.env ? { env: plan.env } : {}),
+    });
 
     const killNow = (): void => {
       if (plan.containerName) fireAndForget('docker', ['kill', plan.containerName]);

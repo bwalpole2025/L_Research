@@ -127,6 +127,9 @@ export async function coderiveRoutes(app: FastifyInstance): Promise<void> {
             modelProvider,
             model: aiModel,
             ...(pdf ? { pdf } : {}),
+            // Verify only the maths in the COMPILED document (drop scratch/unused
+            // .tex files) — we have a compiled PDF + SyncTeX here.
+            scopeToCompiled: Boolean(pdfB64),
             locatePage: async (file, line) => {
               try {
                 const r = await app.compileService.forward(project.id, rootFile, file, line);

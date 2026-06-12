@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Copy, Loader2, Square, Trash2, X } from 'lucide-react';
+import { Check, Copy, FilePlus, FileText, Loader2, Square, Trash2, X } from 'lucide-react';
 import type { RunArtifact } from '@latex-studio/shared';
 import { api } from '@/lib/api';
 import { useEditorStore } from '@/lib/store';
@@ -14,6 +14,22 @@ import { useRunStore } from '@/lib/runStore';
  */
 
 const TRACEBACK = /File "([^"]+)", line (\d+)/;
+
+// Extensions a browser will render directly in <img>. PDFs (the default capture
+// format, vector — best for LaTeX) cannot, so they get a thumbnail/tile instead.
+const IMG_EXTS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.ico'];
+const isImgName = (name: string): boolean => IMG_EXTS.some((e) => name.toLowerCase().endsWith(e));
+const isPdfName = (name: string): boolean => name.toLowerCase().endsWith('.pdf');
+const extLabel = (name: string): string => {
+  const dot = name.lastIndexOf('.');
+  return dot === -1 ? 'FILE' : name.slice(dot + 1).toUpperCase();
+};
+/** A displayable raster URL for an artefact: its PNG preview, or itself if `<img>`-able. */
+function thumbUrlFor(f: RunArtifact): string | null {
+  if (f.previewUrl) return api.runArtifactUrl(f.previewUrl);
+  if (isImgName(f.name)) return api.runArtifactUrl(f.url);
+  return null;
+}
 
 interface Row {
   stream: 'stdout' | 'stderr';
@@ -40,10 +56,34 @@ function statusLine(status: string, exitCode: number | null, durationMs: number 
 }
 
 export function PythonOutputPanel() {
-  const { running, status, segments, exitCode, durationMs, figures, clear, stop } = useRunStore();
+  const { running, status, runId, segments, exitCode, durationMs, figures, clear, stop, importFigure } = useRunStore();
   const revealLocation = useEditorStore((s) => s.revealLocation);
   const [lightbox, setLightbox] = useState<RunArtifact | null>(null);
+  const [added, setAdded] = useState<Set<string>>(new Set());
+  const [adding, setAdding] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // A fresh run clears the "added to files" marks.
+  useEffect(() => setAdded(new Set()), [runId]);
+
+  // figure-kind artefacts already live in figures/ (auto-imported); scratch ones don't.
+  const inFiles = (f: RunArtifact) => f.kind === 'figure' || added.has(f.path);
+  const addOne = async (f: RunArtifact): Promise<void> => {
+    if (inFiles(f) || adding) return;
+    setAdding(f.path);
+    const ok = await importFigure(f.path);
+    setAdding(null);
+    if (ok) setAdded((s) => new Set(s).add(f.path));
+  };
+  const addAll = async (): Promise<void> => {
+    for (const f of figures) {
+      if (inFiles(f)) continue;
+      setAdding(f.path);
+      const ok = await importFigure(f.path);
+      if (ok) setAdded((s) => new Set(s).add(f.path));
+    }
+    setAdding(null);
+  };
 
   const rows = useMemo<Row[]>(() => {
     const out: Row[] = [];
@@ -127,20 +167,60 @@ export function PythonOutputPanel() {
       {/* Figures strip */}
       {figures.length > 0 && (
         <div className="flex-none border-t border-[var(--ls-line)] px-3 py-2">
-          <div className="mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.14em] text-[var(--ls-muted)]">Figures</div>
+          <div className="mb-1.5 flex items-center justify-between">
+            <span className="text-[10.5px] font-semibold uppercase tracking-[0.14em] text-[var(--ls-muted)]">Figures</span>
+            {figures.some((f) => !inFiles(f)) && (
+              <button
+                type="button"
+                data-testid="figure-add-all"
+                disabled={adding !== null}
+                onClick={() => void addAll()}
+                className="inline-flex items-center gap-1 rounded-md border border-[var(--ls-line)] px-2 py-0.5 text-[11px] text-[var(--ls-muted)] transition-colors hover:bg-[var(--ls-surface-muted)] hover:text-[var(--ls-text)] disabled:opacity-50"
+              >
+                <FilePlus className="h-3 w-3" /> Add all to files
+              </button>
+            )}
+          </div>
           <div className="flex flex-wrap gap-2">
             {figures.map((f) => (
-              <button
-                key={f.path}
-                type="button"
-                data-testid="run-figure"
-                onClick={() => setLightbox(f)}
-                title={f.path}
-                className="overflow-hidden rounded-md border border-[var(--ls-line)] bg-[var(--ls-surface-muted)] transition-colors hover:border-[var(--ls-brand)]"
-              >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={api.runArtifactUrl(f.url)} alt={f.name} className="h-20 w-auto max-w-[200px] object-contain" />
-              </button>
+              <div key={f.path} className="flex flex-col gap-1">
+                <button
+                  type="button"
+                  data-testid="run-figure"
+                  onClick={() => setLightbox(f)}
+                  title={f.path}
+                  className="overflow-hidden rounded-md border border-[var(--ls-line)] bg-[var(--ls-surface-muted)] transition-colors hover:border-[var(--ls-brand)]"
+                >
+                  {(() => {
+                    const thumb = thumbUrlFor(f);
+                    return thumb ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={thumb} alt={f.name} className="h-20 w-auto max-w-[200px] object-contain" />
+                    ) : (
+                      // PDF/vector with no raster preview — a labelled document tile.
+                      <div className="flex h-20 w-[116px] flex-col items-center justify-center gap-1 text-[var(--ls-muted)]">
+                        <FileText className="h-6 w-6" />
+                        <span className="text-[10px] font-semibold tracking-wide">{extLabel(f.name)}</span>
+                      </div>
+                    );
+                  })()}
+                </button>
+                {inFiles(f) ? (
+                  <span className="inline-flex items-center justify-center gap-1 text-[10.5px] text-emerald-500" title={`figures/${f.name}`}>
+                    <Check className="h-3 w-3" /> In files
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    data-testid="figure-add"
+                    disabled={adding !== null}
+                    onClick={() => void addOne(f)}
+                    className="inline-flex items-center justify-center gap-1 rounded-md border border-[var(--ls-line)] px-2 py-0.5 text-[10.5px] text-[var(--ls-muted)] transition-colors hover:bg-[var(--ls-surface-muted)] hover:text-[var(--ls-text)] disabled:opacity-50"
+                  >
+                    {adding === f.path ? <Loader2 className="h-3 w-3 animate-spin" /> : <FilePlus className="h-3 w-3" />} Add to files
+                  </button>
+                )}
+              </div>
             ))}
           </div>
         </div>
@@ -152,8 +232,23 @@ export function PythonOutputPanel() {
           <button type="button" aria-label="Close" className="absolute right-4 top-4 rounded-md p-2 text-white/80 hover:text-white" onClick={() => setLightbox(null)}>
             <X className="h-5 w-5" />
           </button>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={api.runArtifactUrl(lightbox.url)} alt={lightbox.name} className="max-h-full max-w-full rounded-lg bg-white shadow-2xl" onClick={(e) => e.stopPropagation()} />
+          {isPdfName(lightbox.name) ? (
+            // Render the real PDF, not the raster thumbnail.
+            <iframe
+              title={lightbox.name}
+              src={api.runArtifactUrl(lightbox.url)}
+              className="h-full w-full max-w-5xl rounded-lg bg-white shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            />
+          ) : (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={thumbUrlFor(lightbox) ?? api.runArtifactUrl(lightbox.url)}
+              alt={lightbox.name}
+              className="max-h-full max-w-full rounded-lg bg-white shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            />
+          )}
         </div>
       )}
     </div>

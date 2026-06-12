@@ -54,14 +54,19 @@ export interface Project {
 /** Lifecycle of a Python run, surfaced in the output window's status line. */
 export type RunStatus = 'running' | 'success' | 'failed' | 'timed-out' | 'stopped';
 
-/** An image produced by a run (a figure or a scratch-dir artefact). */
+/** A figure produced by a run (a figure or a scratch-dir artefact). The primary
+ *  file may be a vector PDF (best for LaTeX); `previewUrl`, when present, points
+ *  at a raster thumbnail to display in place of the (un-`<img>`-able) PDF. */
 export interface RunArtifact {
-  /** File name, e.g. "kdv.png". */
+  /** File name, e.g. "kdv.png" or "figure_01.pdf". */
   name: string;
-  /** Project-relative path, e.g. "figures/kdv.png" or ".pyout/<runId>/plot.png". */
+  /** Project-relative path, e.g. "figures/kdv.png" or ".pyout/<runId>/figure_01.pdf". */
   path: string;
   /** API-relative URL to fetch the bytes (incl. cache-buster). */
   url: string;
+  /** API-relative URL of a raster preview when `url` isn't directly displayable
+   *  (e.g. a PDF primary with a PNG thumbnail). */
+  previewUrl?: string;
   kind: 'figure' | 'scratch';
 }
 

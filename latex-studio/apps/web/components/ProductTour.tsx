@@ -9,7 +9,8 @@ import { loadTourSeen, saveTourSeen } from '@/lib/persist';
  * PRODUCT TOUR — a one-time, GIF-like onboarding popover (Wispr-style). It points
  * a tooltip with an arrow at the header Compile button (`[data-tour="compile"]`)
  * and plays a short looping, muted, inline video demoing the compile → preview
- * flow. Shown once per user (persisted), built from scratch on our stack:
+ * flow. Surfaced the FIRST time the user clicks Compile (once per user, persisted
+ * — the compile still runs), built from scratch on our stack:
  *
  *  - GIF-like video: autoplay + loop + muted + playsInline (+ poster, preload
  *    metadata). Honours `prefers-reduced-motion` (no autoplay, manual controls)
@@ -105,12 +106,24 @@ export function ProductTour() {
   const cardRef = useRef<HTMLDivElement | null>(null);
   const headingId = useId();
 
-  // Decide whether to show (after a beat so the toolbar has laid out).
+  // Trigger: the FIRST time the user clicks the Compile button (once per user).
+  // We don't intercept the click, so the compile proceeds as normal; we just open
+  // the tour alongside it. `?tour=1` force-opens for QA, ignoring the seen flag.
   useEffect(() => {
-    const force = new URLSearchParams(window.location.search).get('tour') === '1';
-    if (!force && loadTourSeen(TOUR_ID)) return;
-    const t = window.setTimeout(() => setOpen(true), 600);
-    return () => window.clearTimeout(t);
+    if (new URLSearchParams(window.location.search).get('tour') === '1') {
+      setOpen(true);
+      return;
+    }
+    if (loadTourSeen(TOUR_ID)) return;
+    const onClick = (e: MouseEvent) => {
+      const target = e.target as Element | null;
+      if (!target?.closest(ANCHOR_SELECTOR)) return;
+      if (loadTourSeen(TOUR_ID)) return; // dismissed between attaching and firing
+      setOpen(true);
+      document.removeEventListener('click', onClick, true);
+    };
+    document.addEventListener('click', onClick, true);
+    return () => document.removeEventListener('click', onClick, true);
   }, []);
 
   // Track the anchor button's position while open.

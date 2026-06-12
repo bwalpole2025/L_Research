@@ -7,7 +7,7 @@ export interface UploadItem {
   relativePath: string;
 }
 
-export const TEXT_EXTENSIONS = ['.tex', '.bib', '.bst', '.sty', '.cls', '.clo', '.txt', '.md', '.csv', '.py'];
+export const TEXT_EXTENSIONS = ['.tex', '.bib', '.bst', '.sty', '.cls', '.clo', '.txt', '.md', '.csv', '.py', '.excalidraw', '.json'];
 export const BINARY_EXTENSIONS = [
   '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tiff', '.tif', '.ico', '.svg',
   '.pdf', '.eps', '.ps', '.ttf', '.otf', '.woff', '.woff2',

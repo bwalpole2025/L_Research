@@ -95,6 +95,28 @@ export function EditorApp() {
     void bootstrap();
   }, [bootstrap]);
 
+  // Deep link: /studio?project=<id>&open=<path> selects the project and opens
+  // the file (e.g. landing straight in a diagram editor).
+  const ready2 = useEditorStore((s) => s.ready);
+  useEffect(() => {
+    if (!ready2) return;
+    const params = new URLSearchParams(window.location.search);
+    const wantProject = params.get('project');
+    const wantOpen = params.get('open');
+    if (!wantProject && !wantOpen) return;
+    void (async () => {
+      const st = useEditorStore.getState();
+      if (wantProject && st.projectId !== wantProject && st.projects.some((p) => p.id === wantProject)) {
+        await st.selectProject(wantProject);
+      }
+      if (wantOpen) {
+        const file = useEditorStore.getState().files.find((f) => f.path === wantOpen);
+        if (file) await useEditorStore.getState().openFile(file.id);
+      }
+      window.history.replaceState(null, '', '/studio'); // one-shot
+    })();
+  }, [ready2]);
+
   const runCheckMath = () => {
     setMathOpen(true);
     void checkDerivation();

@@ -15,6 +15,8 @@ import {
 import { editorController } from './editorController';
 import { parentPath } from './treeUtils';
 import { fileToBase64, isAllowedPath, isBinaryPath, uploadTargetPath, type UploadItem } from './fileKind';
+import { checkerFlagCandidates, compileFlagCandidates, type PdfFlag, type PdfFlagCandidate } from './pdfFlags';
+import type { MathAuditBlock } from '@latex-studio/shared';
 import type {
   CompileResultStatus,
   CursorState,
@@ -42,6 +44,24 @@ const saveTimers = new Map<string, ReturnType<typeof setTimeout>>();
 let compileTimer: ReturnType<typeof setTimeout> | undefined;
 /** Cache key (normalised steps + settings) of the last math check. */
 let mathCacheKey: string | null = null;
+
+/** file:line candidates → PDF rectangles via SyncTeX forward search. Failures
+ *  (synctex missing, line not in the PDF) just drop that flag. */
+async function mapFlagCandidates(projectId: string, candidates: PdfFlagCandidate[], source: PdfFlag['source']): Promise<PdfFlag[]> {
+  const flags = await Promise.all(
+    candidates.map(async (c, i): Promise<PdfFlag | null> => {
+      try {
+        const res = await api.syncForward({ projectId, file: c.file, line: c.line, column: 0 });
+        const box = res.boxes[0];
+        if (!box || !box.page) return null;
+        return { ...c, ...box, id: `${source}-${i}-${c.file}:${c.line}`, source };
+      } catch {
+        return null;
+      }
+    }),
+  );
+  return flags.filter((f): f is PdfFlag => f !== null);
+}
 
 function transitionTitle(t: DerivationTransition): string {
   if (t.verdict === 'ok') return `Consistent with previous step${t.method ? ` (${t.method})` : ''}`;
@@ -110,6 +130,9 @@ interface EditorState {
   // SyncTeX / cross-pane navigation
   pendingReveal: PendingReveal | null;
   forwardHighlight: ForwardHighlight | null;
+  /** Persistent issue highlights drawn over the compiled PDF: orange/yellow
+   *  compile warnings + violet maths-checker flags (lib/pdfFlags). */
+  pdfFlags: PdfFlag[];
 
   // Mathcheck + AI settings
   macros: Record<string, string>;
@@ -163,6 +186,8 @@ interface EditorState {
   locateInPdf: () => Promise<void>;
   locateInPdfAt: (file: string, line: number) => Promise<void>;
   syncInverseJump: (page: number, x: number, y: number) => Promise<void>;
+  /** Replace the checker-sourced PDF flags from a fresh maths-audit report. */
+  setCheckerPdfFlags: (blocks: MathAuditBlock[]) => Promise<void>;
 
   // Mathcheck + AI settings
   saveSettings: (patch: {
@@ -265,6 +290,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
     compileOnSave: false,
     pendingReveal: null,
     forwardHighlight: null,
+    pdfFlags: [],
     macros: {},
     assumptions: '',
     model: 'claude-sonnet-4-6',
@@ -320,6 +346,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
         pdfUrl: null,
         pendingReveal: null,
         forwardHighlight: null,
+        pdfFlags: [],
         mathResult: null,
         mathByLine: {},
         mathFileId: null,
@@ -593,7 +620,19 @@ export const useEditorStore = create<EditorState>((set, get) => {
           compileDurationMs: res.durationMs,
           compileLog: res.log ?? null,
           pdfUrl: res.pdfUrl ? `/api${res.pdfUrl}` : get().pdfUrl,
+          // The layout just changed — stale highlight positions would lie.
+          // Checker flags return on the next audit run.
+          pdfFlags: [],
         });
+        // Highlight every orange/yellow problem in the fresh PDF (async; the
+        // viewer overlays them as they arrive). Red means "no PDF" — nothing
+        // to highlight there.
+        if (res.status === 'success' && res.pdfUrl) {
+          void mapFlagCandidates(projectId, compileFlagCandidates(res.diagnostics), 'compile').then((flags) => {
+            if (get().projectId !== projectId) return;
+            set((s) => ({ pdfFlags: [...flags, ...s.pdfFlags.filter((f) => f.source === 'checker')] }));
+          });
+        }
       } catch (err) {
         set({
           compiling: false,
@@ -654,6 +693,14 @@ export const useEditorStore = create<EditorState>((set, get) => {
       } catch {
         /* synctex unavailable — ignore */
       }
+    },
+
+    async setCheckerPdfFlags(blocks) {
+      const { projectId } = get();
+      if (!projectId) return;
+      const flags = await mapFlagCandidates(projectId, checkerFlagCandidates(blocks), 'checker');
+      if (get().projectId !== projectId) return;
+      set((s) => ({ pdfFlags: [...s.pdfFlags.filter((f) => f.source === 'compile'), ...flags] }));
     },
 
     async syncInverseJump(page, x, y) {

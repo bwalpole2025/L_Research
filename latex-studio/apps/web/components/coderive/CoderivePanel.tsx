@@ -194,8 +194,8 @@ function DocumentVerificationView({ dv }: { dv: DocumentVerification }) {
       )}
 
       <p className="px-3 py-2 text-[11px] text-zinc-400">
-        Every verdict here comes from SymPy, over the equations actually in your document — bibliography and prose are never sent to
-        the verifier. A ✗ means the two sides are not algebraically equal; a ? means SymPy could not decide (often an asymptotic step,
+        Every verdict here comes from SymPy, over the equations that appear in your compiled PDF — equations in scratch/unused .tex
+        files, and bibliography and prose, are never sent to the verifier. A ✗ means the two sides are not algebraically equal; a ? means SymPy could not decide (often an asymptotic step,
         an undefined macro, or a definition rather than an identity). The AI notes are hypotheses to guide you, never correctness rulings.
       </p>
     </div>

@@ -29,6 +29,8 @@ export default defineConfig({
               name: 'latex-studio:session',
               value: JSON.stringify({ email: 'demo@latexstudio.local', name: 'Demo User', signedInAt: '2026-01-01T00:00:00.000Z' }),
             },
+            // The one-time onboarding tour must never overlay test interactions.
+            { name: 'latex-studio:tour:compile', value: 'seen' },
           ],
         },
       ],

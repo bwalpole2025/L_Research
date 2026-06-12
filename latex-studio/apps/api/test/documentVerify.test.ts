@@ -180,4 +180,25 @@ describe('POST /projects/:id/coderive intent=verify-document (route + SSE)', () 
     expect(pdf.statusCode).toBe(200);
     expect(pdf.headers['content-type']).toBe('application/pdf');
   }, 120000);
+
+  it('verifies only the compiled document — a wrong equation in an unused .tex is dropped', async () => {
+    // A clearly-wrong chain in a file the root (chapter.tex) never \inputs, so it
+    // is not in the compiled PDF and must not be verified.
+    const SCRATCH = ['\\begin{align}', 'z &= 2x \\\\', 'z &= 3x', '\\end{align}'].join('\n');
+    await app.inject({ method: 'POST', url: `/projects/${projectId}/files`, headers: auth, payload: { path: 'scratch.tex', content: SCRATCH } });
+
+    const res = await app.inject({ method: 'POST', url: `/projects/${projectId}/coderive`, headers: auth, payload: { intent: 'verify-document' } });
+    const result = res.payload
+      .split('\n\n')
+      .map((b) => ({ event: /event: (.*)/.exec(b)?.[1], data: /data: (.*)/.exec(b)?.[1] }))
+      .find((e) => e.event === 'result');
+    const parsed = JSON.parse(result!.data!) as {
+      documentVerification: { report: { totals: { failing: number }; blocks: Array<{ file: string }> } };
+    };
+    const blocks = parsed.documentVerification.report.blocks;
+    // scratch.tex isn't in the compiled PDF → its equations are not verified.
+    expect(blocks.some((b) => b.file === 'scratch.tex')).toBe(false);
+    // Still exactly one failure — the chain in the compiled document, not scratch's.
+    expect(parsed.documentVerification.report.totals.failing).toBe(1);
+  }, 120000);
 });

@@ -74,19 +74,65 @@ export async function importFigures(prisma: PrismaClient, projectId: string, fig
   }
 }
 
-/** Image files written to the run's scratch dir (shown in the output window only). */
-export async function collectScratchArtifacts(config: AppConfig, projectId: string, runId: string): Promise<string[]> {
-  const snap = await snapshotDir(pyoutDir(config, projectId, runId));
-  return [...snap.keys()].filter(isImage).map((name) => `.pyout/${runId}/${name}`);
+/** A scratch artefact: a primary file plus an optional raster preview sibling. */
+export interface ScratchArtifact {
+  /** Project-relative path of the file added to the project (e.g. a vector PDF). */
+  path: string;
+  /** Project-relative path of a raster thumbnail when the primary isn't an `<img>`. */
+  previewPath?: string;
 }
 
-/** Build the client-facing artefact descriptor (with a cache-busting URL). */
-export function toArtifact(projectId: string, relPath: string, kind: RunArtifact['kind'], rev: number): RunArtifact {
+const RASTER_EXTS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'];
+const isRaster = (name: string): boolean => RASTER_EXTS.some((e) => name.toLowerCase().endsWith(e));
+const stemOf = (name: string): string => {
+  const dot = name.lastIndexOf('.');
+  return dot === -1 ? name : name.slice(0, dot);
+};
+
+/**
+ * Image files written to the run's scratch dir (shown in the output window only).
+ * Files sharing a stem are paired — e.g. the captured `figure_01.pdf` (primary,
+ * vector, what gets added to the document) + `figure_01.png` (raster thumbnail).
+ * A vector file (`.pdf/.svg/.eps/.ps`) is preferred as the primary.
+ */
+export async function collectScratchArtifacts(config: AppConfig, projectId: string, runId: string): Promise<ScratchArtifact[]> {
+  const snap = await snapshotDir(pyoutDir(config, projectId, runId));
+  const names = [...snap.keys()].filter(isImage);
+  const groups = new Map<string, string[]>();
+  for (const name of names) {
+    const key = stemOf(name);
+    const g = groups.get(key);
+    if (g) g.push(name);
+    else groups.set(key, [name]);
+  }
+  const out: ScratchArtifact[] = [];
+  for (const group of groups.values()) {
+    const vector = group.find((n) => !isRaster(n)); // .pdf/.svg/.eps/.ps
+    const raster = group.find(isRaster);
+    const primary = vector ?? raster ?? group[0]!;
+    const art: ScratchArtifact = { path: `.pyout/${runId}/${primary}` };
+    if (vector && raster) art.previewPath = `.pyout/${runId}/${raster}`;
+    out.push(art);
+  }
+  out.sort((a, b) => a.path.localeCompare(b.path));
+  return out;
+}
+
+/** Build the client-facing artefact descriptor (with cache-busting URLs). */
+export function toArtifact(
+  projectId: string,
+  relPath: string,
+  kind: RunArtifact['kind'],
+  rev: number,
+  previewRelPath?: string,
+): RunArtifact {
+  const urlFor = (p: string): string => `/projects/${projectId}/run-artifact?path=${encodeURIComponent(p)}&rev=${rev}`;
   const name = relPath.slice(relPath.lastIndexOf('/') + 1);
   return {
     name,
     path: relPath,
-    url: `/projects/${projectId}/run-artifact?path=${encodeURIComponent(relPath)}&rev=${rev}`,
+    url: urlFor(relPath),
     kind,
+    ...(previewRelPath ? { previewUrl: urlFor(previewRelPath) } : {}),
   };
 }

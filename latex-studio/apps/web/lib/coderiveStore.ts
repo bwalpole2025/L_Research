@@ -12,7 +12,7 @@ export const INTENTS: { id: CoderiveIntent; label: string; help: string; needsRa
   { id: 'next-step', label: 'Next step', help: 'At the cursor — propose the next line of the derivation.', needsRange: false, needsTarget: false },
   { id: 'reach-goal', label: 'Reach goal', help: 'Give a target expression — propose a verified chain from the current line to it.', needsRange: false, needsTarget: true },
   { id: 'justify', label: 'Justify', help: 'Select an existing transition — name the algebraic technique connecting the two lines.', needsRange: true, needsTarget: false },
-  { id: 'verify-document', label: 'Verify document', help: 'No selection needed — SymPy checks every equation in the document; the AI adds context for the ones it cannot pass.', needsRange: false, needsTarget: false, wholeDocument: true },
+  { id: 'verify-document', label: 'Verify document', help: 'No selection needed — compiles the document, then SymPy checks every equation that appears in the compiled PDF (scratch/unused .tex files are skipped); the AI adds context for the ones it cannot pass.', needsRange: false, needsTarget: false, wholeDocument: true },
 ];
 
 function buildOverrides(): FileOverrides {

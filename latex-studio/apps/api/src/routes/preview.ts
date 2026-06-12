@@ -17,7 +17,24 @@ const renderBody = z.object({
   kind: z.enum(['tikz', 'math']),
   /** Maths only: typeset inline ($…$) rather than display — for prose chips. */
   inline: z.boolean().optional(),
+  /** TikZ only: extra preamble packages/libraries the snippet needs (template
+   *  objects: pgfplots surfaces, tikz-3dplot frames, decoration paths). Both
+   *  are filtered through server-side whitelists — never client-trusted. */
+  packages: z.array(z.string()).max(8).optional(),
+  tikzLibraries: z.array(z.string()).max(12).optional(),
 });
+
+/** Heavyweight-but-safe extras a TikZ snippet may request (template previews). */
+const SNIPPET_EXTRA_PKGS = new Set(['pgfplots', 'tikz-3dplot']);
+const SNIPPET_TIKZ_LIBS = new Set([
+  'decorations.pathmorphing', 'decorations.pathreplacing', 'decorations.markings',
+  'fillbetween', // pgfplots library — see PGFPLOTS_TIKZ_LIBS
+  'calc', 'patterns', 'angles', 'quotes', '3d', 'shapes.geometric',
+]);
+/** Must load via \usepgfplotslibrary — the \usetikzlibrary form half-loads
+ *  (fill between's addplot handler stays undefined). Mirrors the web set in
+ *  lib/diagram/templates/types.ts. */
+const PGFPLOTS_TIKZ_LIBS = new Set(['fillbetween']);
 
 const memCache = new Map<string, { pngBase64: string; width: number; height: number }>();
 
@@ -157,14 +174,18 @@ function braceDepth(line: string): number {
   return d;
 }
 
-function snippetDoc(kind: 'tikz' | 'math', latex: string, macroDefs: string, tikzLibs: string[], inline = false, pkgs: string[] = []): string {
+function snippetDoc(kind: 'tikz' | 'math', latex: string, macroDefs: string, tikzLibs: string[], inline = false, pkgs: string[] = [], extraPkgs: string[] = [], plotLibs: string[] = []): string {
   const pkgLines = pkgs.map((p) => `\\usepackage{${p}}`).join('\n');
   if (kind === 'tikz') {
     return [
       '\\documentclass[tikz,border=4pt]{standalone}',
-      tikzLibs.length ? `\\usetikzlibrary{${tikzLibs.join(',')}}` : '',
       '\\usepackage{amsmath,amssymb}',
       pkgLines,
+      // Extra packages BEFORE the libraries: pgfplots libraries only exist
+      // once pgfplots is loaded.
+      ...extraPkgs.map((p) => `\\usepackage{${p}}${p === 'pgfplots' ? '\n\\pgfplotsset{compat=newest}' : ''}`),
+      tikzLibs.length ? `\\usetikzlibrary{${tikzLibs.join(',')}}` : '',
+      plotLibs.length ? `\\usepgfplotslibrary{${plotLibs.join(',')}}` : '',
       macroDefs,
       '\\begin{document}',
       latex,
@@ -218,7 +239,12 @@ export async function previewRoutes(app: FastifyInstance): Promise<void> {
     const { defMap, tikzLibs, pkgs } = harvest(textFiles, (project.macros as Record<string, string> | null) ?? {});
     const macroDefs = neededDefs(parsed.data.latex, defMap);
 
-    const doc = snippetDoc(parsed.data.kind, parsed.data.latex, macroDefs, tikzLibs, parsed.data.inline ?? false, pkgs);
+    const extraPkgs = (parsed.data.packages ?? []).filter((p) => SNIPPET_EXTRA_PKGS.has(p));
+    const requested = (parsed.data.tikzLibraries ?? []).filter((l) => SNIPPET_TIKZ_LIBS.has(l));
+    const plotLibs = requested.filter((l) => PGFPLOTS_TIKZ_LIBS.has(l));
+    const allLibs = [...new Set([...tikzLibs, ...requested.filter((l) => !PGFPLOTS_TIKZ_LIBS.has(l))])];
+
+    const doc = snippetDoc(parsed.data.kind, parsed.data.latex, macroDefs, allLibs, parsed.data.inline ?? false, pkgs, extraPkgs, plotLibs);
     const hash = `snip${sha(doc)}`;
 
     const hit = memCache.get(hash);

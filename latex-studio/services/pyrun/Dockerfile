@@ -12,6 +12,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
+# GNUplot for the diagram editor's plot elements (same sandbox discipline as
+# Python runs — see ADR-013 and run/gnuplot.ts). The Debian build ships the
+# LaTeX-native `cairolatex` terminal used for document-font-matching plots.
+RUN apt-get update && apt-get install -y --no-install-recommends gnuplot-nox && rm -rf /var/lib/apt/lists/*
+
 # A non-root user owns nothing the host cares about; runs also pass --user, but a
 # baked user keeps the image safe even if --user is omitted.
 RUN useradd --create-home --uid 1000 runner

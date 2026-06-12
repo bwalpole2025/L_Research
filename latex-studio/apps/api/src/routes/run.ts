@@ -1,12 +1,12 @@
 import { createReadStream } from 'node:fs';
-import { mkdir, stat } from 'node:fs/promises';
+import { mkdir, readFile, stat } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { validateFilePath } from '../lib/paths.js';
 import { RunManager } from '../run/manager.js';
-import { figuresDir, projectDir, pyoutDir, stageFiles } from '../run/runner.js';
+import { figuresDir, projectDir, pyoutDir, stageFiles, writeBootstrap } from '../run/runner.js';
 import {
   collectNewFigures,
   collectScratchArtifacts,
@@ -21,6 +21,13 @@ const runBody = z.object({
   path: z.string().max(512).optional(),
   args: z.array(z.string().max(512)).max(64).optional(),
 });
+
+const importBody = z.object({ path: z.string().min(1).max(512) });
+
+/** A run artefact path is only servable/importable from the run's own output areas. */
+function isArtifactPath(rel: string): boolean {
+  return (rel.startsWith('figures/') || rel.startsWith('.pyout/')) && !rel.includes('..') && !rel.includes('\\');
+}
 
 const CONTENT_TYPES: Record<string, string> = {
   '.png': 'image/png',
@@ -85,6 +92,7 @@ export async function runRoutes(app: FastifyInstance): Promise<void> {
     await stageFiles(app.config, project.id, files);
     await mkdir(figuresDir(app.config, project.id), { recursive: true });
     await mkdir(pyoutDir(app.config, project.id, runId), { recursive: true });
+    await writeBootstrap(app.config, project.id, runId); // launcher that captures plt.show() output
     const before = await snapshotFigures(app.config, project.id);
 
     reply.hijack();
@@ -122,7 +130,7 @@ export async function runRoutes(app: FastifyInstance): Promise<void> {
       const scratch = await collectScratchArtifacts(app.config, project.id, runId);
       const artifacts = [
         ...newFigs.map((f) => toArtifact(project.id, f.relPath, 'figure', rev)),
-        ...scratch.map((p) => toArtifact(project.id, p, 'scratch', rev)),
+        ...scratch.map((s) => toArtifact(project.id, s.path, 'scratch', rev, s.previewPath)),
       ];
       sse('done', { ...outcome, artifacts });
     } catch (err) {
@@ -145,11 +153,43 @@ export async function runRoutes(app: FastifyInstance): Promise<void> {
     if (!project) return reply.callNotFound();
     const rel = request.query.path ?? '';
     // Only the run's own output areas are servable; reject traversal.
-    if ((!rel.startsWith('figures/') && !rel.startsWith('.pyout/')) || rel.includes('..') || rel.includes('\\')) {
+    if (!isArtifactPath(rel)) {
       return reply.code(400).send({ error: 'Invalid artifact path' });
     }
     const full = join(projectDir(app.config, project.id), rel);
     return sendFile(reply, full, contentTypeFor(rel));
+  });
+
+  // Add a run artefact (a figure or a scratch image from the output window) to the
+  // project's files, under figures/, so it shows in the Files tab and is usable
+  // from LaTeX via \includegraphics. Figures already live in figures/ (idempotent);
+  // scratch images (e.g. captured plt.show() output) are copied there.
+  app.post<{ Params: { id: string }; Body: { path?: string } }>('/projects/:id/run-artifact/import', async (request, reply) => {
+    const project = await app.prisma.project.findUnique({ where: { id: request.params.id }, select: { id: true } });
+    if (!project) return reply.callNotFound();
+    const parsed = importBody.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'Invalid body', details: parsed.error.flatten() });
+    const rel = parsed.data.path;
+    if (!isArtifactPath(rel)) return reply.code(400).send({ error: 'Invalid artifact path' });
+
+    // Destination in the project: figures keep their path; scratch images land in figures/.
+    const base = rel.slice(rel.lastIndexOf('/') + 1);
+    const dest = rel.startsWith('figures/') ? rel : `figures/${base}`;
+    const destCheck = validateFilePath(dest);
+    if (!destCheck.ok) return reply.code(400).send({ error: destCheck.error });
+
+    let content: string;
+    try {
+      content = (await readFile(join(projectDir(app.config, project.id), rel))).toString('base64');
+    } catch {
+      return reply.code(404).send({ error: 'Artifact not found' });
+    }
+    const file = await app.prisma.texFile.upsert({
+      where: { projectId_path: { projectId: project.id, path: dest } },
+      update: { content, encoding: 'base64' },
+      create: { projectId: project.id, path: dest, content, encoding: 'base64' },
+    });
+    return { id: file.id, projectId: file.projectId, path: file.path, encoding: file.encoding, updatedAt: file.updatedAt.toISOString() };
   });
 
   // The `% !py <script> -> <output>` figure links across the project's .tex files.

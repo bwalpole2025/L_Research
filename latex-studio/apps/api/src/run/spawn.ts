@@ -7,6 +7,8 @@ export interface StreamHandlers {
 
 export interface StreamOptions {
   cwd?: string;
+  /** Extra env vars merged over the parent's (used by `local` mode). */
+  env?: Record<string, string>;
   /**
    * Start the child in its own process group and kill the whole group on `kill()`
    * (so a script's children die too). Used for the host-python `local` mode; the
@@ -35,6 +37,7 @@ export function streamProcess(command: string, args: string[], handlers: StreamH
     cwd: options.cwd,
     detached: options.killGroup === true,
     stdio: ['ignore', 'pipe', 'pipe'],
+    ...(options.env ? { env: { ...process.env, ...options.env } } : {}),
   });
   child.stdout.setEncoding('utf8');
   child.stderr.setEncoding('utf8');

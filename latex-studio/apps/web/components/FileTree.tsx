@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  Shapes,
   ChevronDown,
   ChevronRight,
   FileCode,
@@ -145,8 +146,8 @@ export function FileTree() {
     });
 
   const newFile = useCallback(
-    async (folder: string) => {
-      const name = window.prompt(`New file in ${folder || 'root'} (e.g. chapter.tex)`);
+    async (folder: string, presetName?: string) => {
+      const name = presetName ?? window.prompt(`New file in ${folder || 'root'} (e.g. chapter.tex)`);
       if (!name?.trim()) return;
       const path = folder ? `${folder}/${name.trim()}` : name.trim();
       try {
@@ -271,7 +272,11 @@ export function FileTree() {
           ) : isBinaryPath(node.path) ? (
             <FileImage className="ml-[18px] h-4 w-4 shrink-0 text-violet-500" />
           ) : (
+            node.path.toLowerCase().endsWith('.diagram.json') ? (
+            <Shapes className="ml-[18px] h-4 w-4 shrink-0 text-[#4e68f5]" />
+          ) : (
             <FileCode className="ml-[18px] h-4 w-4 shrink-0 text-zinc-400" />
+          )
           )}
           <span
             className="flex-1 cursor-pointer truncate"
@@ -313,6 +318,14 @@ export function FileTree() {
         <span>Files</span>
         <div className="flex items-center gap-0.5">
           <IconButton icon={FilePlus} label="New file" onClick={() => void newFile('')} />
+          <IconButton
+            icon={Shapes}
+            label="New TikZ diagram"
+            onClick={() => {
+              const name = window.prompt('New diagram name (e.g. setup)');
+              if (name?.trim()) void newFile('', `${name.trim().replace(/\.diagram\.json$/i, '')}.diagram.json`);
+            }}
+          />
           <IconButton icon={Upload} label="Upload files" onClick={() => triggerUpload('')} />
           <IconButton icon={FolderUp} label="Upload folder" onClick={() => triggerFolderUpload('')} />
           <IconButton icon={FolderPlus} label="New folder" onClick={() => newFolder('')} />

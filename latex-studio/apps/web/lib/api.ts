@@ -157,6 +157,8 @@ export const api = {
   getPyFigures: (projectId: string) => request<{ links: PyFigureLink[] }>('GET', `/projects/${projectId}/pyfigures`),
   /** Same-origin proxied URL for a run artefact (server returns the inner path). */
   runArtifactUrl: (serverUrl: string) => `/api${serverUrl}`,
+  /** Copy a run artefact (figure or scratch image) into the project's files (figures/). */
+  importRunArtifact: (projectId: string, path: string) => request<FileMeta>('POST', `/projects/${projectId}/run-artifact/import`, { path }),
 
   // App-level project folders (Home explorer).
   listProjectFolders: () => request<ProjectFoldersResponse>('GET', '/project-folders'),
@@ -260,8 +262,23 @@ export const api = {
   libItemPdfUrl: (itemId: string) => `/api/library/items/${itemId}/pdf`,
 
   // Semi-compiled snippet rendering (Visual editor: TikZ diagrams + maths fallback).
-  renderSnippet: (projectId: string, body: { latex: string; kind: 'tikz' | 'math'; inline?: boolean }) =>
+  renderSnippet: (projectId: string, body: { latex: string; kind: 'tikz' | 'math'; inline?: boolean; packages?: string[]; tikzLibraries?: string[] }) =>
     request<{ pngBase64: string; width: number; height: number; cached: boolean }>('POST', `/projects/${projectId}/render-snippet`, body),
+
+  // Diagram editor: frozen-PDF export + sandboxed GNUplot.
+  diagramPdf: (projectId: string, body: { tikz: string; outPath: string; packages?: string[]; tikzLibraries?: string[] }) =>
+    request<{ path: string }>('POST', `/projects/${projectId}/diagram-pdf`, body),
+  runGnuplot: (
+    projectId: string,
+    body: {
+      source: { type: 'function'; expr: string } | { type: 'data'; data: string };
+      settings: { xrange: string; yrange: string; xlabel: string; ylabel: string; plotStyle: string };
+      style?: { stroke?: string; strokeWidth?: number; dash?: string };
+      widthCm: number;
+      heightCm: number;
+      base: string;
+    },
+  ) => request<{ ok: boolean; base: string; stdout: string; stderr: string; previewPng?: string }>('POST', `/projects/${projectId}/gnuplot`, body),
 
   // Adaptive autocomplete usage (local habit data; never sent anywhere external).
   getUsage: (projectId: string) => request<{ app: UsageStatRow[]; project: UsageStatRow[] }>('GET', `/projects/${projectId}/usage`),

@@ -17,8 +17,10 @@ import {
   Play,
   Plus,
   Settings,
+  Shapes,
   Share2,
   Sigma,
+  Workflow,
   Sparkles,
   SpellCheck,
   Square,
@@ -247,6 +249,26 @@ export function Toolbar({ onOpenSnapshots, onOpenSettings, onCheckMath }: Toolba
         >
           <Share2 className="h-[15px] w-[15px]" /> Share
         </button>
+
+        {/* Visual diagram editor (separate page). */}
+        <Link
+          href="/diagram"
+          data-testid="open-diagram"
+          title="Visual diagram editor"
+          className="flex h-9 items-center gap-2 rounded-[9px] border border-zinc-300 px-3.5 text-[13.5px] text-zinc-700 transition-colors hover:bg-zinc-50 dark:border-[#2a3247] dark:text-[#c6cde0] dark:hover:border-[#3a4866] dark:hover:bg-[#10182b]"
+        >
+          <Shapes className="h-[15px] w-[15px]" /> Diagram
+        </Link>
+
+        {/* Maths/TikZ diagram editor — its own full page, like /diagram. */}
+        <Link
+          href={projectId ? `/math-diagram?project=${projectId}` : '/math-diagram'}
+          data-testid="open-math-diagram"
+          title="Maths diagram editor (TikZ — labels typeset with your document)"
+          className="flex h-9 items-center gap-2 rounded-[9px] border border-zinc-300 px-3.5 text-[13.5px] text-zinc-700 transition-colors hover:bg-zinc-50 dark:border-[#2a3247] dark:text-[#c6cde0] dark:hover:border-[#3a4866] dark:hover:bg-[#10182b]"
+        >
+          <Workflow className="h-[15px] w-[15px]" /> Math diagram
+        </Link>
 
         {/* Run Python (separate from Compile) — flips to Stop while running. */}
         <div className="relative flex items-center">

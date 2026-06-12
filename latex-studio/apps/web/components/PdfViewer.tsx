@@ -7,6 +7,7 @@ import {
   ChevronRight,
   Crosshair,
   Download,
+  Highlighter,
   Loader2,
   Maximize,
   ZoomIn,
@@ -14,6 +15,8 @@ import {
 } from 'lucide-react';
 import { useEditorStore } from '@/lib/store';
 import { useReviewStore } from '@/lib/reviewStore';
+import { useThesisStore } from '@/lib/thesisStore';
+import type { PdfFlag } from '@/lib/pdfFlags';
 
 type PdfMode = 'light' | 'dim' | 'invert';
 
@@ -34,6 +37,20 @@ interface Highlight {
   height: number;
   nonce: number;
 }
+
+/** Persistent issue highlights: orange = important compile warning, yellow =
+ *  minor, violet = the co-derive verified maths checker couldn't pass it. */
+const FLAG_STYLE: Record<PdfFlag['severity'], string> = {
+  'warning-important': 'bg-orange-400/35 ring-1 ring-orange-500/80 hover:bg-orange-400/50',
+  'warning-minor': 'bg-yellow-300/40 ring-1 ring-yellow-400/80 hover:bg-yellow-300/60',
+  checker: 'bg-violet-400/30 ring-1 ring-violet-500/80 hover:bg-violet-400/45',
+};
+
+const FLAG_LABEL: Record<PdfFlag['severity'], string> = {
+  'warning-important': 'Important warning',
+  'warning-minor': 'Minor warning',
+  checker: 'Maths checker flag',
+};
 
 /** Filename for the downloaded PDF, derived from what is being viewed.
  *  Exported for tests. */
@@ -84,6 +101,8 @@ export function PdfViewer() {
   const forwardHighlight = useEditorStore((s) => s.forwardHighlight);
   const locateInPdf = useEditorStore((s) => s.locateInPdf);
   const syncInverseJump = useEditorStore((s) => s.syncInverseJump);
+  const pdfFlags = useEditorStore((s) => s.pdfFlags);
+  const revealLocation = useEditorStore((s) => s.revealLocation);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const docRef = useRef<PDFDocumentProxy | null>(null);
@@ -101,6 +120,15 @@ export function PdfViewer() {
   const [renderNonce, setRenderNonce] = useState(0);
   const [mode, setMode] = useState<PdfMode>(theme === 'dark' ? 'dim' : 'light');
   const [highlight, setHighlight] = useState<Highlight | null>(null);
+  const [showFlags, setShowFlags] = useState(true);
+
+  // Issue highlights only make sense on the clean compiled document — the
+  // review/literature PDFs have different layouts.
+  const flagsVisible = effectiveMode === 'clean' && showFlags;
+  const onFlagClick = (f: PdfFlag) => {
+    useThesisStore.getState().setBottomTab(f.source === 'checker' ? 'maths' : 'problems');
+    void revealLocation(f.file, f.line);
+  };
 
   scaleRef.current = scale;
 
@@ -388,6 +416,21 @@ export function PdfViewer() {
         >
           <Maximize className="h-4 w-4" />
         </button>
+        {effectiveMode === 'clean' && pdfFlags.length > 0 && (
+          <button
+            type="button"
+            data-testid="pdf-flags-toggle"
+            aria-pressed={showFlags}
+            title={`Issue highlights: orange = important warnings, yellow = minor, violet = maths-checker flags (${pdfFlags.length})`}
+            onClick={() => setShowFlags((v) => !v)}
+            className={`${pdfButton} relative w-auto gap-1 px-1.5 ${showFlags ? 'bg-orange-50 text-orange-600 dark:bg-orange-500/15 dark:text-orange-300' : ''}`}
+          >
+            <Highlighter className="h-4 w-4" />
+            <span className="text-[10px] font-semibold tabular-nums" data-testid="pdf-flags-count">
+              {pdfFlags.length}
+            </span>
+          </button>
+        )}
 
         <div className="ml-auto flex items-center gap-1">
           <select
@@ -470,6 +513,29 @@ export function PdfViewer() {
                     }}
                   />
                 )}
+                {flagsVisible &&
+                  pdfFlags
+                    .filter((f) => f.page === p)
+                    .map((f) => (
+                      <button
+                        key={f.id}
+                        type="button"
+                        data-testid="pdf-flag"
+                        data-severity={f.severity}
+                        title={`${FLAG_LABEL[f.severity]}: ${f.message}\n${f.file}:${f.line} — click to open`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onFlagClick(f);
+                        }}
+                        className={`absolute cursor-pointer rounded-sm transition-colors ${FLAG_STYLE[f.severity]}`}
+                        style={{
+                          left: f.x * scale,
+                          top: f.y * scale,
+                          width: Math.max(f.width * scale, 12),
+                          height: Math.max(f.height * scale, 10),
+                        }}
+                      />
+                    ))}
               </div>
             ))}
           </div>

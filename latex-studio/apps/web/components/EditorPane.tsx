@@ -11,6 +11,8 @@ import { EditorTabs } from './EditorTabs';
 import { CodeEditor } from './editor/CodeEditor';
 import { VisualView } from './editor/VisualView';
 import { BinaryFilePreview } from './editor/BinaryFilePreview';
+import { TikzDiagramEditor } from './diagram/TikzDiagramEditor';
+import { isDiagramPath } from '../lib/diagram/model';
 
 export function EditorPane() {
   const activeFileId = useEditorStore((s) => s.activeFileId);
@@ -108,7 +110,9 @@ export function EditorPane() {
         )}
       </div>
       <div className="min-h-0 flex-1">
-        {isBinary && activePath ? (
+        {activePath && activeFileId && isDiagramPath(activePath) ? (
+          <TikzDiagramEditor fileId={activeFileId} path={activePath} content={contents[activeFileId] ?? ''} embedded />
+        ) : isBinary && activePath ? (
           <BinaryFilePreview path={activePath} base64={activeFileId ? contents[activeFileId] : undefined} />
         ) : showVisual && activeFileId ? (
           <VisualView content={contents[activeFileId] ?? ''} onJump={jumpToCode} />

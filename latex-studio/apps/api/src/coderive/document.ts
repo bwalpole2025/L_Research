@@ -54,7 +54,42 @@ export interface DocumentVerifyDeps {
   pdf?: PdfContext;
   /** SyncTeX forward: locate a source line's page in the compiled PDF. */
   locatePage?: (file: string, line: number) => Promise<number | null>;
+  /**
+   * Verify only the maths that's in the COMPILED document: drop equations from
+   * .tex files the compile never included (scratch/unused files, never \input by
+   * the root). Set when a compiled PDF + SyncTeX are available. See the filter
+   * comment in runDocumentVerification for why scoping is at the file level.
+   */
+  scopeToCompiled?: boolean;
   onProgress?: (stage: string) => void;
+}
+
+/** Anchor as many blocks as possible to their compiled-PDF page (bounded
+ *  concurrency, so a long document doesn't serialise hundreds of SyncTeX calls).
+ *  Mutates `block.pdfPage`; returns how many were located. */
+async function locateBlocks(
+  blocks: MathAuditBlock[],
+  locate: (file: string, line: number) => Promise<number | null>,
+  concurrency: number,
+): Promise<number> {
+  let next = 0;
+  let located = 0;
+  const worker = async (): Promise<void> => {
+    while (next < blocks.length) {
+      const b = blocks[next++]!;
+      try {
+        const page = await locate(b.file, b.lineStart);
+        if (page && page > 0) {
+          b.pdfPage = page;
+          located++;
+        }
+      } catch {
+        /* leave unlocated */
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, blocks.length) }, () => worker()));
+  return located;
 }
 
 /** Equations SymPy could not pass — the ones worth AI context, worst first. */
@@ -175,17 +210,38 @@ export async function runDocumentVerification(
     assumptions: deps.assumptions,
   });
 
-  // Anchor each equation to its page in the compiled PDF (SyncTeX forward).
-  if (deps.locatePage && report.blocks.length > 0) {
+  // Anchor each equation to its page in the compiled PDF (SyncTeX forward). An
+  // equation whose source line produced NO output — commented out, in an excluded
+  // \if branch, or in a .tex file the root never \inputs — has no page.
+  const MAX_LOCATE = 1500;
+  let locatedCount = 0;
+  if (deps.locatePage && report.blocks.length > 0 && report.blocks.length <= MAX_LOCATE) {
     deps.onProgress?.('locating equations in the compiled PDF');
-    const toLocate = report.blocks.slice(0, 250);
-    for (const b of toLocate) {
-      try {
-        const page = await deps.locatePage(b.file, b.lineStart);
-        if (page && page > 0) b.pdfPage = page;
-      } catch {
-        /* leave unlocated */
-      }
+    locatedCount = await locateBlocks(report.blocks, deps.locatePage, 6);
+  }
+
+  // SCOPE TO THE COMPILED DOCUMENT — verify only the maths that's actually in the
+  // compiled PDF. We scope at the FILE level: a .tex file that contributed at
+  // least one PDF-located equation is part of the document; one that contributed
+  // none (a scratch/unused file the compile never pulled in) is not, and its
+  // equations are dropped. Deliberately NOT per-equation: SyncTeX can fail to
+  // anchor an individual equation that IS in the PDF, and silently dropping a real
+  // equation would HIDE a maths error. Skipped when there's no compiled PDF/SyncTeX
+  // (locatedCount 0) so the check never returns nothing on a SyncTeX hiccup.
+  if (deps.scopeToCompiled && locatedCount > 0) {
+    const filesInPdf = new Set(report.blocks.filter((b) => b.pdfPage !== undefined).map((b) => b.file));
+    const inPdf = report.blocks.filter((b) => filesInPdf.has(b.file));
+    if (inPdf.length > 0 && inPdf.length < report.blocks.length) {
+      report.blocks = inPdf;
+      report.totals = {
+        failing: inPdf.filter((r) => r.verdict === 'failing').length,
+        unknown: inPdf.filter((r) => r.verdict === 'unknown').length,
+        passed: inPdf.filter((r) => r.verdict === 'passed').length,
+        checked: inPdf.length,
+        cached: Math.min(report.totals.cached, inPdf.length),
+      };
+      report.byFile = {};
+      for (const r of inPdf) if (r.verdict !== 'passed') report.byFile[r.file] = (report.byFile[r.file] ?? 0) + 1;
     }
   }
 

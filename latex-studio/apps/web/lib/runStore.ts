@@ -40,6 +40,8 @@ interface RunState {
   runPath: (path: string) => void;
   /** Stop the running script (kills the sandbox). */
   stop: () => Promise<void>;
+  /** Add a run figure to the project files (figures/) so it shows in the Files tab. */
+  importFigure: (path: string) => Promise<boolean>;
   /** Clear the console + figures. */
   clear: () => void;
   /** Regenerate `% !py` figures, then compile (Run & Compile). */
@@ -75,7 +77,11 @@ function runOnce(body: { path?: string; fileId?: string }): Promise<void> {
       onStart: (s) => useRunStore.setState({ runId: s.runId, script: s.script }),
       onStdout: (chunk) => append('stdout', chunk),
       onStderr: (chunk) => append('stderr', chunk),
-      onDone: (d) => useRunStore.setState({ running: false, status: d.status, exitCode: d.exitCode, durationMs: d.durationMs, figures: d.artifacts }),
+      onDone: (d) => {
+        useRunStore.setState({ running: false, status: d.status, exitCode: d.exitCode, durationMs: d.durationMs, figures: d.artifacts });
+        // Auto-imported figures/ images are now project files — refresh the Files tab.
+        if (d.artifacts.some((a) => a.kind === 'figure')) void useEditorStore.getState().refreshFiles();
+      },
       onError: (message) => {
         append('stderr', `\n${message}\n`);
         useRunStore.setState({ running: false, status: 'failed' });
@@ -119,6 +125,18 @@ export const useRunStore = create<RunState>((set, get) => ({
   async stop() {
     const projectId = useEditorStore.getState().projectId;
     if (projectId) await api.stopRun(projectId).catch(() => undefined); // server emits the terminal `done`
+  },
+
+  async importFigure(path) {
+    const projectId = useEditorStore.getState().projectId;
+    if (!projectId) return false;
+    try {
+      await api.importRunArtifact(projectId, path);
+      await useEditorStore.getState().refreshFiles(); // surface it in the Files tab
+      return true;
+    } catch {
+      return false;
+    }
   },
 
   clear() {

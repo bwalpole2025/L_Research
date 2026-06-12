@@ -130,6 +130,8 @@ export const useThesisStore = create<ThesisState>((set, get) => ({
         overrides: buildOverrides(),
       });
       set({ auditReport: report, auditing: false });
+      // Surface unverified equations as violet highlights in the compiled PDF.
+      void useEditorStore.getState().setCheckerPdfFlags(report.blocks);
     } catch (err) {
       set({ auditing: false, auditError: err instanceof ApiError ? err.message : 'Audit failed' });
     }

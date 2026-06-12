@@ -634,3 +634,67 @@ sandbox, then compiles — so the PDF reflects the latest Python output.
 `PYRUN_MODE=local` spawns host `python3` directly (no container). It exists so tests can
 exercise the streaming/timeout/stop/figure-capture plumbing without building the image; it
 is **not sandboxed** and must not be used in a real deployment. `docker` is the default.
+
+## ADR-014 — Diagram editor: scene-first TikZ export, sandboxed GNUplot
+
+**Decision.** The visual diagram editor stores a scene JSON (`<name>.diagram.json`)
+as the canonical representation; TikZ (and the PDF/preview) are GENERATED exports,
+never parsed back. The `raw-tikz` element is explicitly opaque: it passes to the
+export verbatim and is shown only as a placeholder box on the canvas. Two editors
+coexist deliberately: the TikZ editor (this ADR) for TikZ-semantic diagrams —
+flowcharts, commutative diagrams, physics setups — whose labels must typeset with
+the document's fonts; and the Excalidraw editor (`/diagram`) for freeform art,
+exported as an image for `\includegraphics`. That is the scope boundary: the TikZ
+editor targets diagrams, not arbitrary illustration; freeform beyond TikZ's comfort
+belongs to the image path. A per-diagram "Export PDF" produces a frozen vector PDF
+(compiled standalone) for `\includegraphics` when a diagram should NOT recompile
+with the document; the default `.tikz` export recompiles with it.
+
+**Arrow tips.** Exports use the classic built-in `stealth`/`latex` tips, not
+`arrows.meta` — the export is `\input` into document bodies where
+`\usetikzlibrary` is not allowed, and classic tips compile everywhere.
+
+**GNUplot.** Plot elements run GNUplot with the SAME sandbox discipline as Python
+runs (ADR-013): a fresh `docker run --rm` from the pyrun image (which now carries
+gnuplot), non-root, CPU/memory/pids limits, in-container kill backstop, project
+mounted read-only with only `diagrams/` and the run scratch writable — and, unlike
+Python, the network is ALWAYS off (no opt-in exists). GNUplot never executes on
+the host. Running/regenerating plots is an explicit user action. Output terminal:
+`cairolatex pdf` — the LaTeX-native terminal whose text overlay (`.tex`) typesets
+in the document's own fonts with the curves in a companion `.pdf`; both are saved
+back as project files under `diagrams/plots/`. Plain `pdfcairo` remains the manual
+fallback for a frozen standalone plot. All of this is asserted in
+`apps/api/test/gnuplot.test.ts` (sandbox flags) and exercised live.
+
+## ADR-015 — Template objects: a data-driven catalogue, compile-proven
+
+**Decision.** The diagram editor's insertable maths objects (axes, vectors, 3D
+solids, curves, set diagrams) live in ONE registry
+(`apps/web/lib/diagram/templates/catalog.tsx`); each entry declares typed
+params, an SVG canvas approximation, the REAL LaTeX export, required preamble
+entries and a footprint. Palette, inspector, exporter, preview and the
+preamble offer all read the registry — adding a template is adding one object
+(see the how-to in `templates/types.ts`). The canvas drawing is an
+APPROXIMATION; the compiled export is the fidelity target.
+
+**Shared 3D frame.** `scene.view3d` (θ, φ) is the single tikz-3dplot main-coords
+frame: every 3D template projects through it on canvas (`project3d`, matched to
+`\tdplotsetmaincoords`) and the exporter emits that command ONCE, so solids,
+axes and vectors sit on one consistent figure. pgfplots surfaces approximate
+the same frame via `view={φ−90}{90−θ}`.
+
+**Preamble is never touched silently.** Templates may need `pgfplots`,
+`tikz-3dplot` or decoration libraries. Exports carry the requirement as
+comments (bodies cannot `\usepackage`); on export the editor diffs the root
+preamble and OFFERS the exact missing lines (accept/skip). `fillbetween` is
+offered as `\usepgfplotslibrary` — the `\usetikzlibrary` form half-loads in
+current pgfplots builds (its addplot handler stays undefined). The
+render-snippet/diagram-pdf routes accept the same names through server-side
+whitelists only.
+
+**Compile-proven, drift-proof.** The web suite generates per-category fixtures
+from the REAL registry + exporter (file snapshot,
+`apps/api/test/fixtures/template-acceptance.json`); the api live suite compiles
+every fixture through texlive (`templateAcceptance.test.ts`). A catalogue change
+that breaks an export fails CI, not a user's document. The texlive container
+needed `tlmgr install pgfplots tikz-3dplot` (pinned-mirror workflow).
