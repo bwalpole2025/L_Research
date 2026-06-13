@@ -42,7 +42,9 @@ import type {
   Project,
   ProjectFolder,
   ProjectFoldersResponse,
+  ProjectListView,
   PyFigureLink,
+  PythonCheckResponse,
   RunDone,
   RunStarted,
   ProseCheckReport,
@@ -52,6 +54,7 @@ import type {
   SyncForwardResult,
   SyncInverseRequest,
   SyncInverseResult,
+  StorageEntry,
   TexFile,
   XrefReport,
 } from '@latex-studio/shared';
@@ -131,9 +134,20 @@ async function aiRequest<T>(method: string, path: string, body: unknown): Promis
 }
 
 export const api = {
-  listProjects: () => request<Project[]>('GET', '/projects'),
+  /** Active projects by default; pass a view for the Archived / Trash buckets. */
+  listProjects: (view?: ProjectListView) =>
+    request<Project[]>('GET', view && view !== 'active' ? `/projects?view=${view}` : '/projects'),
   createProject: (name: string, folderId?: string | null) =>
     request<Project>('POST', '/projects', { name, ...(folderId !== undefined ? { folderId } : {}) }),
+
+  // Project lifecycle: archive (set aside), soft-delete to Trash, restore, purge.
+  archiveProject: (id: string) => request<Project>('POST', `/projects/${id}/archive`, {}),
+  unarchiveProject: (id: string) => request<Project>('POST', `/projects/${id}/unarchive`, {}),
+  deleteProject: (id: string) => request<Project>('DELETE', `/projects/${id}`),
+  restoreProject: (id: string) => request<Project>('POST', `/projects/${id}/restore`, {}),
+  purgeProject: (id: string) => request<{ ok: boolean }>('DELETE', `/projects/${id}/permanent`),
+  emptyProjectsTrash: () => request<{ ok: boolean; removed: number }>('DELETE', '/projects-trash/purge'),
+
   getProject: (id: string) => request<Project>('GET', `/projects/${id}`),
   updateProject: (
     id: string,
@@ -159,6 +173,9 @@ export const api = {
   runArtifactUrl: (serverUrl: string) => `/api${serverUrl}`,
   /** Copy a run artefact (figure or scratch image) into the project's files (figures/). */
   importRunArtifact: (projectId: string, path: string) => request<FileMeta>('POST', `/projects/${projectId}/run-artifact/import`, { path }),
+  /** AI + deterministic error check of one Python file (overrides = live editor buffers). */
+  pythonCheck: (projectId: string, body: { path?: string; fileId?: string; overrides?: Record<string, string> }) =>
+    request<PythonCheckResponse>('POST', `/projects/${projectId}/python-check`, body),
 
   // App-level project folders (Home explorer).
   listProjectFolders: () => request<ProjectFoldersResponse>('GET', '/project-folders'),
@@ -321,6 +338,17 @@ export const api = {
   configureConnector: (id: string, clientId: string, clientSecret: string) =>
     request<ConnectorConnectResult>('POST', `/connectors/${id}/configure`, { clientId, clientSecret }),
   disconnectConnector: (id: string) => request<ConnectorConnectResult>('POST', `/connectors/${id}/disconnect`),
+
+  // ── Storage connectors (Drive/Dropbox/OneDrive): browse, import, upload ───────
+  /** List entries in a storage folder (`path` is a provider folder id; '' = top). */
+  listStorage: (connectorId: string, path?: string) =>
+    request<{ entries: StorageEntry[] }>('GET', `/connectors/storage/${connectorId}/list${path ? `?path=${encodeURIComponent(path)}` : ''}`),
+  /** Pull a provider file INTO the project as `path` (text→utf8, binary→base64). */
+  importFromStorage: (projectId: string, connectorId: string, body: { fileId: string; path: string }) =>
+    request<FileMeta>('POST', `/projects/${projectId}/storage/${connectorId}/import`, body),
+  /** Push a project file TO the provider, into `parentFolderId` (default: top). */
+  uploadToStorage: (projectId: string, connectorId: string, body: { fileId: string; parentFolderId?: string }) =>
+    request<{ entry: StorageEntry }>('POST', `/projects/${projectId}/storage/${connectorId}/upload`, body),
 };
 
 /** Stream a "why doesn't this step follow" explanation (SSE), token by token. */

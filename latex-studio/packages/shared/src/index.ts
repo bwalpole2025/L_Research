@@ -47,7 +47,14 @@ export interface Project {
   pythonRunTarget?: string;
   /** Whether the Python sandbox may access the network (off by default). */
   networkEnabled?: boolean;
+  /** ISO timestamp when archived (set aside), or null when active. */
+  archivedAt?: string | null;
+  /** ISO timestamp when soft-deleted to Trash, or null when not deleted. */
+  deletedAt?: string | null;
 }
+
+/** Which project lifecycle bucket to list: active (default), archived, deleted. */
+export type ProjectListView = 'active' | 'archived' | 'deleted';
 
 // ─── Python "Run" (sandboxed local execution) ────────────────────────────────
 
@@ -152,6 +159,17 @@ export interface Diagnostic {
   rerunHint?: boolean;
   /** For grouped entries (box warnings): number of raw occurrences collapsed. */
   count?: number;
+}
+
+/** Result of the AI + deterministic Python error check (reuses `Diagnostic`). */
+export interface PythonCheckResponse {
+  diagnostics: Diagnostic[];
+  /** True when the deterministic parser found no SyntaxError. */
+  syntaxOk: boolean;
+  /** True when the AI review ran (and returned, possibly empty, results). */
+  aiProvided: boolean;
+  /** Project-relative path that was checked. */
+  checkedPath: string;
 }
 
 export interface CompileResult {
@@ -559,7 +577,7 @@ export interface ReplacementResponse {
 
 // ─── Inline completions (ghost text) ─────────────────────────────────────────
 
-export type CompletionMode = 'prose' | 'inline-math' | 'display-align' | 'preamble';
+export type CompletionMode = 'prose' | 'inline-math' | 'display-align' | 'preamble' | 'python-code';
 
 export interface CompletionInlineRequest {
   /** ~2000 prefix tokens up to the cursor. */

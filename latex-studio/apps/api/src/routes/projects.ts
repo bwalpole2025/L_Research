@@ -42,6 +42,8 @@ function serialiseProject(p: {
   aiProvider: string;
   pythonRunTarget: string;
   networkEnabled: boolean;
+  archivedAt: Date | null;
+  deletedAt: Date | null;
 }) {
   return {
     id: p.id,
@@ -57,6 +59,8 @@ function serialiseProject(p: {
     aiProvider: p.aiProvider ?? 'anthropic',
     pythonRunTarget: p.pythonRunTarget ?? '',
     networkEnabled: p.networkEnabled ?? false,
+    archivedAt: p.archivedAt ? p.archivedAt.toISOString() : null,
+    deletedAt: p.deletedAt ? p.deletedAt.toISOString() : null,
   };
 }
 
@@ -68,10 +72,59 @@ async function folderExists(app: FastifyInstance, folderId: string | null): Prom
 }
 
 export async function projectRoutes(app: FastifyInstance): Promise<void> {
-  // List projects (newest first).
-  app.get('/projects', async () => {
-    const projects = await app.prisma.project.findMany({ orderBy: { updatedAt: 'desc' } });
+  // List projects (newest first). `view` selects the lifecycle bucket:
+  //   active (default) — both archivedAt + deletedAt NULL; the only view the
+  //                      editor ever uses, so archived/deleted never appear there.
+  //   archived         — archivedAt set, not deleted.
+  //   deleted          — deletedAt set (in Trash).
+  const listQuery = z.object({ view: z.enum(['active', 'archived', 'deleted']).default('active') });
+  app.get<{ Querystring: { view?: string } }>('/projects', async (request) => {
+    const view = listQuery.safeParse(request.query).data?.view ?? 'active';
+    const where: Prisma.ProjectWhereInput =
+      view === 'archived'
+        ? { archivedAt: { not: null }, deletedAt: null }
+        : view === 'deleted'
+          ? { deletedAt: { not: null } }
+          : { archivedAt: null, deletedAt: null };
+    const orderBy: Prisma.ProjectOrderByWithRelationInput =
+      view === 'deleted' ? { deletedAt: 'desc' } : view === 'archived' ? { archivedAt: 'desc' } : { updatedAt: 'desc' };
+    const projects = await app.prisma.project.findMany({ where, orderBy });
     return projects.map(serialiseProject);
+  });
+
+  // ── Lifecycle: archive / trash / restore / purge ────────────────────────────
+  // A reusable setter for the soft-state flags; returns the serialised project.
+  async function setLifecycle(id: string, data: { archivedAt?: Date | null; deletedAt?: Date | null }, reply: import('fastify').FastifyReply) {
+    const existing = await app.prisma.project.findUnique({ where: { id } });
+    if (!existing) return reply.callNotFound();
+    const project = await app.prisma.project.update({ where: { id }, data });
+    return serialiseProject(project);
+  }
+
+  // Archive (set aside) / unarchive.
+  app.post<{ Params: { id: string } }>('/projects/:id/archive', (request, reply) => setLifecycle(request.params.id, { archivedAt: new Date() }, reply));
+  app.post<{ Params: { id: string } }>('/projects/:id/unarchive', (request, reply) => setLifecycle(request.params.id, { archivedAt: null }, reply));
+
+  // Soft-delete to Trash / restore back to active (clears BOTH flags).
+  app.delete<{ Params: { id: string } }>('/projects/:id', (request, reply) => setLifecycle(request.params.id, { deletedAt: new Date() }, reply));
+  app.post<{ Params: { id: string } }>('/projects/:id/restore', (request, reply) => setLifecycle(request.params.id, { deletedAt: null, archivedAt: null }, reply));
+
+  // Permanent delete — only from the Trash (a project must be soft-deleted first,
+  // so a single click can never destroy a live project). Cascades to its files.
+  app.delete<{ Params: { id: string } }>('/projects/:id/permanent', async (request, reply) => {
+    const existing = await app.prisma.project.findUnique({ where: { id: request.params.id }, select: { id: true, deletedAt: true } });
+    if (!existing) return reply.callNotFound();
+    if (!existing.deletedAt) return reply.code(409).send({ error: 'Move the project to Trash before deleting it permanently.' });
+    await app.prisma.project.delete({ where: { id: existing.id } });
+    return { ok: true };
+  });
+
+  // Empty the project Trash (purge ALL soft-deleted projects). Folders have
+  // their own trash (/project-trash); this is projects only.
+  app.delete('/projects-trash/purge', async () => {
+    const doomed = await app.prisma.project.findMany({ where: { deletedAt: { not: null } }, select: { id: true } });
+    for (const p of doomed) await app.prisma.project.delete({ where: { id: p.id } }).catch(() => undefined);
+    return { ok: true, removed: doomed.length };
   });
 
   // Create a project, seeded with a minimal compilable main.tex.

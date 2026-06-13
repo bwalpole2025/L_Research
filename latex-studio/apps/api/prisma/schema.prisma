@@ -63,6 +63,13 @@ model Project {
   pythonRunTarget String  @default("")
   networkEnabled  Boolean @default(false)
 
+  // Lifecycle. A project is ACTIVE when both are null. `archivedAt` set ⇒ set
+  // aside (hidden from the main list + editor, fully restorable). `deletedAt`
+  // set ⇒ in the Trash (soft-deleted; restorable until purged). The default
+  // project list and the editor only ever see active projects.
+  archivedAt DateTime?
+  deletedAt  DateTime?
+
   files       TexFile[]
   compileLogs CompileLog[]
   snapshots   Snapshot[]
@@ -74,6 +81,8 @@ model Project {
   folder ProjectFolder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
 
   @@index([folderId])
+  @@index([archivedAt])
+  @@index([deletedAt])
 }
 
 // Hierarchical folders for BOTH trees (one mechanism). `tree` distinguishes the
