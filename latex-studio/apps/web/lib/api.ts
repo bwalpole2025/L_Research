@@ -262,7 +262,7 @@ export const api = {
   libItemPdfUrl: (itemId: string) => `/api/library/items/${itemId}/pdf`,
 
   // Semi-compiled snippet rendering (Visual editor: TikZ diagrams + maths fallback).
-  renderSnippet: (projectId: string, body: { latex: string; kind: 'tikz' | 'math'; inline?: boolean; packages?: string[]; tikzLibraries?: string[] }) =>
+  renderSnippet: (projectId: string, body: { latex: string; kind: 'tikz' | 'math'; inline?: boolean; packages?: string[]; tikzLibraries?: string[]; variant?: string }) =>
     request<{ pngBase64: string; width: number; height: number; cached: boolean }>('POST', `/projects/${projectId}/render-snippet`, body),
 
   // Diagram editor: frozen-PDF export + sandboxed GNUplot.

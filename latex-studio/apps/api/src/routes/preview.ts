@@ -22,6 +22,11 @@ const renderBody = z.object({
    *  are filtered through server-side whitelists — never client-trusted. */
   packages: z.array(z.string()).max(8).optional(),
   tikzLibraries: z.array(z.string()).max(12).optional(),
+  /** Opaque cache discriminator: the SAME TikZ may \input generated artefacts
+   *  (GNUplot PDFs) that change on disk without the TikZ text changing, which
+   *  would otherwise serve a stale cached PNG. The client passes a fingerprint
+   *  of those artefacts so a regenerated plot recompiles. */
+  variant: z.string().max(400).optional(),
 });
 
 /** Heavyweight-but-safe extras a TikZ snippet may request (template previews). */
@@ -236,6 +241,16 @@ export async function previewRoutes(app: FastifyInstance): Promise<void> {
       select: { path: true, content: true, encoding: true },
     });
     const textFiles = files.filter((f) => f.encoding !== 'base64').map((f) => ({ path: f.path, content: f.content }));
+    // Staging input. A TikZ snippet may \includegraphics a generated artefact —
+    // most importantly a GNUplot cairolatex .pdf (stored base64) whose .tex
+    // overlay the snippet \input: if the .pdf is not on disk the \includegraphics
+    // aborts the compile, so the plot's axes and labels never render. So for
+    // TikZ we stage BINARY files too; maths chips never reference them, so they
+    // keep staging only text (no extra IO per chip). Harvesting uses textFiles.
+    const stageInput =
+      parsed.data.kind === 'tikz'
+        ? files.map((f) => ({ path: f.path, content: f.content, encoding: f.encoding as 'utf8' | 'base64' }))
+        : textFiles.map((f) => ({ ...f, encoding: 'utf8' as const }));
     const { defMap, tikzLibs, pkgs } = harvest(textFiles, (project.macros as Record<string, string> | null) ?? {});
     const macroDefs = neededDefs(parsed.data.latex, defMap);
 
@@ -245,7 +260,10 @@ export async function previewRoutes(app: FastifyInstance): Promise<void> {
     const allLibs = [...new Set([...tikzLibs, ...requested.filter((l) => !PGFPLOTS_TIKZ_LIBS.has(l))])];
 
     const doc = snippetDoc(parsed.data.kind, parsed.data.latex, macroDefs, allLibs, parsed.data.inline ?? false, pkgs, extraPkgs, plotLibs);
-    const hash = `snip${sha(doc)}`;
+    // The variant discriminates otherwise-identical docs whose \input artefacts
+    // (GNUplot PDFs) changed on disk — without it a restyled plot serves a stale
+    // cached image.
+    const hash = `snip${sha(doc + (parsed.data.variant ?? ''))}`;
 
     const hit = memCache.get(hash);
     if (hit) return { ...hit, cached: true };
@@ -262,9 +280,10 @@ export async function previewRoutes(app: FastifyInstance): Promise<void> {
 
     // Compile the standalone snippet inside the project workspace (own basename →
     // no clash with the document's artifacts), then rasterise via mathcheck.
-    // The project's text files are staged first: the snippet preamble loads the
-    // project's own .sty packages, which must exist on disk.
-    await app.compileService.stageFiles(project.id, textFiles);
+    // The project's files are staged first: the snippet preamble loads the
+    // project's own .sty packages, and \input/\includegraphics targets (e.g. a
+    // GNUplot cairolatex .tex + .pdf pair) must exist on disk.
+    await app.compileService.stageFiles(project.id, stageInput);
     await app.compileService.writeSnippet(project.id, `${hash}.tex`, doc);
     const compiled = await app.compileService.compileSnippet(project.id, `${hash}.tex`);
     // A non-zero exit with only warnings (rerun-for-labels etc.) still produces a

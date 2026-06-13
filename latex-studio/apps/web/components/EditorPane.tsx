@@ -8,6 +8,7 @@ import { useAiStore } from '@/lib/aiStore';
 import { useRunStore } from '@/lib/runStore';
 import { usePreviewStore } from '@/lib/previewStore';
 import { isBinaryPath } from '@/lib/fileKind';
+import { dialog } from '@/lib/dialogStore';
 import { EditorTabs } from './EditorTabs';
 import { CodeEditor } from './editor/CodeEditor';
 import { VisualView } from './editor/VisualView';
@@ -85,10 +86,10 @@ export function EditorPane() {
   }, [diagnostics, projects, projectIdForDiag, filesForDiag, activeFileId]);
 
   const onRequestSnapshot = useCallback(() => {
-    const label = window.prompt('Snapshot label', `Snapshot ${new Date().toLocaleString()}`);
-    if (label && label.trim()) {
-      void createSnapshot(label.trim());
-    }
+    void dialog.prompt({ title: 'Create snapshot', defaultValue: `Snapshot ${new Date().toLocaleString()}`, placeholder: 'label' }).then((label) => {
+      const v = label?.trim();
+      if (v) void createSnapshot(v);
+    });
   }, [createSnapshot]);
 
   const activePath = activeFileId ? files.find((f) => f.id === activeFileId)?.path : undefined;

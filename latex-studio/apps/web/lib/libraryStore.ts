@@ -5,7 +5,11 @@ import { api, ApiError } from './api';
 import { useEditorStore } from './store';
 import { useReviewStore } from './reviewStore';
 import { fileToBase64, isImagePath } from './fileKind';
+import { dialog } from './dialogStore';
 import type { CiteLink, LibraryFolder, LiteratureItem, TrashItem } from './types';
+
+/** Styled, non-blocking notice (replaces window.alert for library messages). */
+const notify = (message: string): void => void dialog.alert({ title: 'Library', message });
 
 interface PendingUpload {
   files: File[];
@@ -95,7 +99,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       await api.createLibFolder(ed.projectId, name.trim(), parentId);
       await get().load();
     } catch (err) {
-      window.alert(err instanceof ApiError ? err.message : 'Could not create the folder');
+      notify(err instanceof ApiError ? err.message : 'Could not create the folder');
     }
   },
 
@@ -105,7 +109,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       await api.renameLibFolder(id, { name: name.trim() });
       await get().load();
     } catch (err) {
-      window.alert(err instanceof ApiError ? err.message : 'Could not rename');
+      notify(err instanceof ApiError ? err.message : 'Could not rename');
     }
   },
 
@@ -114,14 +118,14 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       await api.deleteLibFolder(id);
       await get().load();
     } catch (err) {
-      window.alert(err instanceof ApiError ? err.message : 'Could not delete');
+      notify(err instanceof ApiError ? err.message : 'Could not delete');
     }
   },
 
   requestUpload(files, folderId) {
     const pdfs = files.filter((f) => /\.pdf$/i.test(f.name) || (!isImagePath(f.name) && f.type === 'application/pdf'));
     if (pdfs.length === 0) {
-      window.alert('Only PDF files can be added to the library.');
+      notify('Only PDF files can be added to the library.');
       return;
     }
     set({ pendingUpload: { files: pdfs, folderId } });
@@ -137,7 +141,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
         const fileBase64 = await fileToBase64(file);
         await api.uploadLibItem(ed.projectId, { fileName: file.name, fileBase64, folderId: pending.folderId });
       } catch (err) {
-        window.alert(`${file.name}: ${err instanceof ApiError ? err.message : 'upload failed'}`);
+        notify(`${file.name}: ${err instanceof ApiError ? err.message : 'upload failed'}`);
       }
     }
     await get().load();
@@ -152,7 +156,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       await api.patchLibItem(id, body);
       await get().load();
     } catch (err) {
-      window.alert(err instanceof ApiError ? err.message : 'Could not save');
+      notify(err instanceof ApiError ? err.message : 'Could not save');
     }
   },
 
@@ -161,7 +165,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       await api.linkLibItem(id, citeKey);
       await get().load();
     } catch (err) {
-      window.alert(err instanceof ApiError ? err.message : 'Could not link');
+      notify(err instanceof ApiError ? err.message : 'Could not link');
     }
   },
 
@@ -171,9 +175,9 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       const { citeKey } = await api.generateBib(id);
       await get().load();
       if (ed.projectId) await ed.refreshFiles().catch(() => undefined);
-      window.alert(`Created and linked \\cite{${citeKey}} in your .bib.`);
+      notify(`Created and linked \\cite{${citeKey}} in your .bib.`);
     } catch (err) {
-      window.alert(err instanceof ApiError ? err.message : 'Could not generate a .bib entry');
+      notify(err instanceof ApiError ? err.message : 'Could not generate a .bib entry');
     }
   },
 
@@ -182,7 +186,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       await api.deleteLibItem(id);
       await get().load();
     } catch (err) {
-      window.alert(err instanceof ApiError ? err.message : 'Could not delete');
+      notify(err instanceof ApiError ? err.message : 'Could not delete');
     }
   },
 
@@ -244,7 +248,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       await api.restoreTrash(ed.projectId, trashId);
       await Promise.all([get().load(), get().openTrash()]);
     } catch (err) {
-      window.alert(err instanceof ApiError ? err.message : 'Could not restore');
+      notify(err instanceof ApiError ? err.message : 'Could not restore');
     }
   },
 
@@ -255,7 +259,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       await api.emptyTrash(ed.projectId);
       await Promise.all([get().load(), get().openTrash()]);
     } catch (err) {
-      window.alert(err instanceof ApiError ? err.message : 'Could not empty trash');
+      notify(err instanceof ApiError ? err.message : 'Could not empty trash');
     }
   },
 }));

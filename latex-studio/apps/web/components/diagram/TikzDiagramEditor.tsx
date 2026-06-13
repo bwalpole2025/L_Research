@@ -96,6 +96,14 @@ function labelHtml(label: string): string {
 
 const snapTo = (v: number, grid: number, on: boolean): number => (on ? Math.round(v / grid) * grid : v);
 
+/** Tiny djb2 hash → short base36 string. Used to fingerprint a plot's
+ *  generated artefact so the typeset preview busts its cache when it changes. */
+function quickHash(s: string): string {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+}
+
 interface DragState {
   kind: 'move' | 'create' | 'resize' | 'marquee' | 'edge' | 'pan';
   startX: number;
@@ -506,6 +514,17 @@ export function TikzDiagramEditor({ fileId, path, content, embedded }: { fileId:
     }),
     [reqs],
   );
+  // GNUplot plots are \input by a STABLE path, so re-running one with a new
+  // style/expression produces byte-identical TikZ — the typeset preview would
+  // then serve a STALE cached image. This signature changes whenever a plot's
+  // generated artefact changes (its preview PNG tracks the regenerated PDF), so
+  // it both re-fires the effect and busts the render-snippet cache.
+  const plotSignature = useMemo(() => {
+    const sigs = scene.elements
+      .filter((e): e is PlotElement => e.kind === 'plot')
+      .map((p) => `${p.generatedBase ?? '-'}:${quickHash(p.previewPng ?? '')}`);
+    return sigs.join('|');
+  }, [scene.elements]);
 
   useEffect(() => {
     if (!projectId || scene.elements.length === 0) {
@@ -515,12 +534,12 @@ export function TikzDiagramEditor({ fileId, path, content, embedded }: { fileId:
     const t = setTimeout(() => {
       setPreview((prev) => ({ ...prev, busy: true }));
       api
-        .renderSnippet(projectId, { latex: tikz.code, kind: 'tikz', ...reqBody })
+        .renderSnippet(projectId, { latex: tikz.code, kind: 'tikz', ...reqBody, ...(plotSignature ? { variant: plotSignature } : {}) })
         .then((r) => setPreview({ png: `data:image/png;base64,${r.pngBase64}`, busy: false }))
         .catch((err) => setPreview({ error: err instanceof Error ? err.message : 'preview failed', busy: false }));
     }, 900);
     return () => clearTimeout(t);
-  }, [tikz.code, projectId, scene.elements.length, reqBody]);
+  }, [tikz.code, projectId, scene.elements.length, reqBody, plotSignature]);
 
   // The preamble offer: when the diagram's templates need packages/libraries
   // the document doesn't load, show the EXACT lines and let the user accept or

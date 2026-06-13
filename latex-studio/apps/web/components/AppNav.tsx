@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import type { Project } from '@latex-studio/shared';
 import { api } from '@/lib/api';
+import { dialog } from '@/lib/dialogStore';
 import { saveLastProject } from '@/lib/persist';
 import { loadSession, signOut } from '@/lib/session';
 import { Wordmark } from '@/components/Wordmark';
@@ -57,14 +58,16 @@ export function AppShell({ children }: { children: ReactNode }) {
         <button
           type="button"
           data-testid="new-project"
-          onClick={() => {
-            const name = window.prompt('Name the new project:');
-            if (!name?.trim()) return;
-            void api.createProject(name.trim()).then((p) => {
-              saveLastProject(p.id);
-              router.push('/studio');
-            });
-          }}
+          onClick={() =>
+            void dialog.prompt({ title: 'New project', placeholder: 'project name' }).then((raw) => {
+              const name = raw?.trim();
+              if (!name) return;
+              void api.createProject(name).then((p) => {
+                saveLastProject(p.id);
+                router.push('/studio');
+              });
+            })
+          }
           className="mt-[26px] flex h-[46px] w-full items-center justify-center gap-2 rounded-[11px] bg-[#4e68f5] text-[14.5px] font-semibold text-white shadow-[0_6px_20px_rgba(78,104,245,0.30)] transition-colors hover:bg-[#5f78f8]"
         >
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none">

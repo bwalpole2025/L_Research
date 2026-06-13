@@ -181,11 +181,35 @@ export async function diagramRoutes(app: FastifyInstance): Promise<void> {
         const pdf = await readFile(join(projDir, `${outBase}.pdf`));
         await upsertProjectFile(app, project.id, `${outBase}.tex`, tex, 'utf8');
         await upsertProjectFile(app, project.id, `${outBase}.pdf`, pdf.toString('base64'), 'base64');
+
+        // Faithful canvas preview: the cairolatex .pdf holds only the GRAPHICS
+        // (curve, axes, grid); the axis/tick LABELS live in the .tex overlay.
+        // Rasterising the raw .pdf would drop every label, so compile a tiny
+        // standalone that \input the overlay (it \includegraphics the .pdf,
+        // both already on disk) and rasterise THAT. Fall back to the bare .pdf
+        // if the overlay compile fails.
+        let previewPdf = pdf;
+        try {
+          const previewBase = `gpprev${runId}`;
+          const previewDoc = [
+            '\\documentclass[border=2pt]{standalone}',
+            '\\usepackage{amsmath,amssymb,graphicx}',
+            '\\begin{document}',
+            `\\input{${outBase}.tex}`,
+            '\\end{document}',
+          ].join('\n');
+          await app.compileService.writeSnippet(project.id, `${previewBase}.tex`, previewDoc);
+          await app.compileService.compileSnippet(project.id, `${previewBase}.tex`);
+          previewPdf = await readFile(app.compileService.pdfPath(project.id, `${previewBase}.tex`));
+        } catch {
+          /* overlay compile failed — rasterise the graphics-only .pdf */
+        }
+
         try {
           const r = await fetch(`${cfg.mathcheckUrl}/pdf-png`, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ pdf_base64: pdf.toString('base64'), dpi: 110 }),
+            body: JSON.stringify({ pdf_base64: previewPdf.toString('base64'), dpi: 110 }),
           });
           const d = (await r.json()) as { png_base64?: string };
           if (d.png_base64) previewPng = d.png_base64;

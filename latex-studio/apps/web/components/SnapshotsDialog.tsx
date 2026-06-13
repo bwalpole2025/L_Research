@@ -4,9 +4,10 @@ import { useEffect, useState } from 'react';
 import { History, X } from 'lucide-react';
 import { useEditorStore } from '@/lib/store';
 import { ApiError } from '@/lib/api';
+import { dialog } from '@/lib/dialogStore';
 
 function reportError(err: unknown): void {
-  window.alert(err instanceof ApiError ? err.message : 'Something went wrong');
+  void dialog.alert({ title: 'Couldn’t complete that', message: err instanceof ApiError ? err.message : 'Something went wrong.' });
 }
 
 export function SnapshotsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -23,11 +24,11 @@ export function SnapshotsDialog({ open, onClose }: { open: boolean; onClose: () 
   if (!open) return null;
 
   const create = async () => {
-    const label = window.prompt('Snapshot label', `Snapshot ${new Date().toLocaleString()}`);
-    if (!label?.trim()) return;
+    const label = (await dialog.prompt({ title: 'Create snapshot', defaultValue: `Snapshot ${new Date().toLocaleString()}`, placeholder: 'label' }))?.trim();
+    if (!label) return;
     setBusy(true);
     try {
-      await createSnapshot(label.trim());
+      await createSnapshot(label);
     } catch (err) {
       reportError(err);
     } finally {
@@ -36,7 +37,7 @@ export function SnapshotsDialog({ open, onClose }: { open: boolean; onClose: () 
   };
 
   const restore = async (id: string, label: string) => {
-    if (!window.confirm(`Restore "${label}"? This replaces the project's current files.`)) return;
+    if (!(await dialog.confirm({ title: 'Restore snapshot', message: `Restore “${label}”? This replaces the project's current files.`, confirmLabel: 'Restore' }))) return;
     setBusy(true);
     try {
       await restoreSnapshot(id);
