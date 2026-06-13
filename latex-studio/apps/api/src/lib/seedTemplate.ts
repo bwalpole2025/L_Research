@@ -1,6 +1,8 @@
 /** The starter main.tex every new project is seeded with. Shared so the root
  *  resolver can recognise an UNTOUCHED seed and prefer a real uploaded document. */
 export const DEFAULT_MAIN_TEX = `\\documentclass{article}
+\\usepackage{amsmath}
+\\usepackage{amssymb}
 
 \\title{Untitled}
 \\author{}

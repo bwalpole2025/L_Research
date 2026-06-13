@@ -1,5 +1,26 @@
-import type { Diagnostic } from '@latex-studio/shared';
+import type { Diagnostic, DiagnosticQuickFix } from '@latex-studio/shared';
 import { classifyBox, classifyError, classifyWarning } from './severityTable.js';
+
+/** amsmath-provided environments: using one without \usepackage{amsmath} gives
+ *  "Environment <env> undefined" + a cascade of "Misplaced alignment tab
+ *  character &". A one-click "Add amsmath" resolves the whole thing. */
+const AMSMATH_ENVS = new Set([
+  'align', 'alignat', 'flalign', 'gather', 'multline', 'split', 'aligned', 'gathered',
+  'alignedat', 'cases', 'matrix', 'pmatrix', 'bmatrix', 'vmatrix', 'smallmatrix', 'subarray', 'equation*',
+]);
+
+/** A deterministic fix for compile errors whose remedy is a missing package —
+ *  today, amsmath for its environments and the misplaced-`&` cascade they cause. */
+function deterministicFix(message: string): DiagnosticQuickFix | undefined {
+  const env = /Environment\s+([A-Za-z]+\*?)\s+undefined/.exec(message);
+  if (env && AMSMATH_ENVS.has((env[1] ?? '').toLowerCase())) {
+    return { kind: 'add-package', package: 'amsmath', label: 'Add amsmath' };
+  }
+  if (/Misplaced alignment tab character/i.test(message)) {
+    return { kind: 'add-package', package: 'amsmath', label: 'Add amsmath' };
+  }
+  return undefined;
+}
 
 /**
  * Parse a pdflatex/latexmk `.log` (compiled with `-file-line-error`) into
@@ -94,6 +115,7 @@ export function parseLatexLog(log: string): Diagnostic[] {
       const message = cleanMessage(fle[3] ?? '');
       const rule = classifyError(message);
       const block = errorBlock(i);
+      const fix = deterministicFix(message);
       push({
         severity: 'error',
         category: rule.category,
@@ -101,6 +123,7 @@ export function parseLatexLog(log: string): Diagnostic[] {
         line: Number(fle[2]),
         message,
         rawExcerpt: block.excerpt,
+        ...(fix ? { quickFix: fix } : {}),
       });
       applyParens(line, fileStack);
       continue;
@@ -173,6 +196,8 @@ export function parseLatexLog(log: string): Diagnostic[] {
       const rule = classifyError(message);
       const block = errorBlock(i);
       const d: Diagnostic = { severity: 'error', category: rule.category, message, rawExcerpt: block.excerpt };
+      const fix = deterministicFix(message);
+      if (fix) d.quickFix = fix;
       const cf = currentFile();
       if (cf) d.file = cf;
       if (block.line !== undefined) d.line = block.line;

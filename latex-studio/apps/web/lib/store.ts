@@ -23,6 +23,7 @@ import type {
   DerivationResult,
   DerivationTransition,
   Diagnostic,
+  DiagnosticQuickFix,
   FileMeta,
   ForwardHighlight,
   MathLineMarker,
@@ -61,6 +62,27 @@ async function mapFlagCandidates(projectId: string, candidates: PdfFlagCandidate
     }),
   );
   return flags.filter((f): f is PdfFlag => f !== null);
+}
+
+/** Insert `\usepackage{<pkg>}` into a document's preamble if not already loaded
+ *  (in its own line or a comma list). Inserts after the last \usepackage, else
+ *  after \documentclass. Returns the content unchanged when already present. */
+export function addPreamblePackage(content: string, pkg: string): string {
+  const escaped = pkg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  if (new RegExp(`\\\\usepackage(?:\\[[^\\]]*\\])?\\{[^}]*\\b${escaped}\\b[^}]*\\}`).test(content)) return content;
+  const line = `\\usepackage{${pkg}}`;
+  const pkgs = [...content.matchAll(/^[^\n%]*\\usepackage[^\n]*$/gm)];
+  const last = pkgs[pkgs.length - 1];
+  if (last && last.index !== undefined) {
+    const at = last.index + last[0].length;
+    return `${content.slice(0, at)}\n${line}${content.slice(at)}`;
+  }
+  const dc = /\\documentclass[^\n]*\n/.exec(content);
+  if (dc) {
+    const at = dc.index + dc[0].length;
+    return `${content.slice(0, at)}${line}\n${content.slice(at)}`;
+  }
+  return `${line}\n${content}`;
 }
 
 function transitionTitle(t: DerivationTransition): string {
@@ -180,6 +202,9 @@ interface EditorState {
 
   // Compilation + SyncTeX
   compileProject: () => Promise<void>;
+  /** Apply a diagnostic's deterministic quick-fix (e.g. add a missing
+   *  \usepackage to the root preamble) and recompile. */
+  applyDiagnosticQuickFix: (fix: DiagnosticQuickFix) => Promise<void>;
   setCompileOnSave: (value: boolean) => void;
   revealLocation: (file: string, line: number, column?: number) => Promise<void>;
   consumeReveal: () => void;
@@ -639,6 +664,23 @@ export const useEditorStore = create<EditorState>((set, get) => {
           compileError: err instanceof ApiError ? err.message : 'Compilation failed',
         });
       }
+    },
+
+    async applyDiagnosticQuickFix(fix) {
+      if (fix.kind !== 'add-package') return;
+      const { projectId, projects, files } = get();
+      if (!projectId) return;
+      const rootPath = projects.find((p) => p.id === projectId)?.rootFile ?? 'main.tex';
+      const root = files.find((f) => f.path === rootPath);
+      if (!root) return;
+      const current = get().contents[root.id] ?? (await api.getFile(root.id)).content;
+      const next = addPreamblePackage(current, fix.package);
+      if (next !== current) {
+        get().setContent(root.id, next);
+        // Persist immediately so the compile (server-side) sees the new package.
+        await api.updateFile(root.id, { content: next }).catch(() => undefined);
+      }
+      await get().compileProject();
     },
 
     setCompileOnSave(value) {

@@ -36,8 +36,25 @@ describe('compile outcome rule (live latexmk)', () => {
   const compile = async () => {
     const res = await app.inject({ method: 'POST', url: `/projects/${projectId}/compile`, headers: auth });
     expect(res.statusCode).toBe(200);
-    return res.json() as { status: string; pdfUrl?: string; diagnostics: Array<{ severity: string; category?: string }> };
+    return res.json() as { status: string; pdfUrl?: string; diagnostics: Array<{ severity: string; category?: string; message: string; quickFix?: { kind: string; package: string } }> };
   };
+
+  it('align without amsmath: the undefined-environment error carries an "Add amsmath" quick-fix; adding it clears all errors', async () => {
+    const docNoAms = '\\documentclass{article}\n\\begin{document}\n\\begin{align}\nq &= (x+1)^2 \\\\\nq &= x^2 + 2x + 1\n\\end{align}\n\\end{document}\n';
+    await setMain(docNoAms);
+    const before = await compile();
+    const envErr = before.diagnostics.find((d) => d.category === 'undefined-environment');
+    expect(envErr, 'an undefined-environment error for align').toBeTruthy();
+    expect(envErr?.quickFix).toMatchObject({ kind: 'add-package', package: 'amsmath' });
+    // The misplaced-& cascade carries the same fix.
+    expect(before.diagnostics.some((d) => /Misplaced alignment tab/.test(d.message) && d.quickFix?.package === 'amsmath')).toBe(true);
+
+    // Applying the fix (what the panel button does) clears it.
+    await setMain(docNoAms.replace('\\documentclass{article}\n', '\\documentclass{article}\n\\usepackage{amsmath}\n'));
+    const after = await compile();
+    expect(after.status).toBe('success');
+    expect(after.diagnostics.some((d) => d.severity === 'error')).toBe(false);
+  }, 120000);
 
   it('an undefined control sequence that still yields a PDF: status success, ORANGE entry, no red', async () => {
     await setMain('\\documentclass{article}\n\\begin{document}\nBefore \\undefinedcmd after.\n\\end{document}\n');

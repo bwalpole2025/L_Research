@@ -125,4 +125,27 @@ describe('SEVERITY TAXONOMY — each fixture lands in the documented tier with f
     expect(d.find((x) => x.category === 'marginpar-moved')?.severity).toBe('warning-minor');
     expect(important(d)).toHaveLength(0);
   });
+
+  it('an amsmath environment used without amsmath gets a one-click "Add amsmath" quick-fix', () => {
+    // The exact cascade from using \begin{align} with no \usepackage{amsmath}.
+    const log = [
+      './main.tex:8: LaTeX Error: Environment align undefined.',
+      '',
+      'See the LaTeX manual or LaTeX Companion for explanation.',
+      'l.8 \\begin{align}',
+      './main.tex:9: Misplaced alignment tab character &.',
+      'l.9 q &',
+      '      = (x+1)^2',
+    ].join('\n');
+    const d = parseLatexLog(log);
+    const envErr = d.find((x) => x.category === 'undefined-environment');
+    expect(envErr?.quickFix).toEqual({ kind: 'add-package', package: 'amsmath', label: 'Add amsmath' });
+    const tabErr = d.find((x) => /Misplaced alignment tab/.test(x.message));
+    expect(tabErr?.quickFix?.package).toBe('amsmath');
+  });
+
+  it('an undefined NON-amsmath environment gets no package quick-fix', () => {
+    const d = parseLatexLog('./main.tex:3: LaTeX Error: Environment myenv undefined.\nl.3 \\begin{myenv}');
+    expect(d.find((x) => x.category === 'undefined-environment')?.quickFix).toBeUndefined();
+  });
 });

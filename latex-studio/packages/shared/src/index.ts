@@ -159,6 +159,19 @@ export interface Diagnostic {
   rerunHint?: boolean;
   /** For grouped entries (box warnings): number of raw occurrences collapsed. */
   count?: number;
+  /** A deterministic one-click fix the UI can apply directly (no LLM needed),
+   *  e.g. adding a missing \usepackage for an amsmath environment. */
+  quickFix?: DiagnosticQuickFix;
+}
+
+/** A deterministic, one-click remedy attached to a diagnostic. */
+export interface DiagnosticQuickFix {
+  /** Insert `\usepackage{<package>}` into the root file's preamble. */
+  kind: 'add-package';
+  /** Package name, e.g. "amsmath". */
+  package: string;
+  /** Button label shown in the Problems panel, e.g. "Add amsmath". */
+  label: string;
 }
 
 /** Result of the AI + deterministic Python error check (reuses `Diagnostic`). */

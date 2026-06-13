@@ -59,6 +59,7 @@ export function DiagnosticsPanel() {
   const projectId = useEditorStore((s) => s.projectId);
   const revealLocation = useEditorStore((s) => s.revealLocation);
   const compileProject = useEditorStore((s) => s.compileProject);
+  const applyDiagnosticQuickFix = useEditorStore((s) => s.applyDiagnosticQuickFix);
   const requestFix = useAiStore((s) => s.requestFix);
   const suggestAllFixes = useAiStore((s) => s.suggestAllFixes);
   const aiAvailable = useAiStore((s) => s.status.available);
@@ -262,6 +263,18 @@ export function DiagnosticsPanel() {
                         className="my-1 mr-2 inline-flex shrink-0 items-center gap-1 self-center rounded border border-emerald-300 px-1.5 py-0.5 text-[11px] font-medium text-emerald-700 hover:bg-emerald-50 dark:border-emerald-500/40 dark:text-emerald-300 dark:hover:bg-emerald-500/10"
                       >
                         <Play className="h-3 w-3" /> Recompile
+                      </button>
+                    )}
+                    {d.quickFix && (
+                      <button
+                        type="button"
+                        onClick={() => void applyDiagnosticQuickFix(d.quickFix!)}
+                        disabled={compiling}
+                        title={`${d.quickFix.label} and recompile`}
+                        data-testid="diag-quick-fix"
+                        className="my-1 mr-2 inline-flex shrink-0 items-center gap-1 self-center rounded border border-emerald-300 px-1.5 py-0.5 text-[11px] font-medium text-emerald-700 hover:bg-emerald-50 disabled:opacity-50 dark:border-emerald-500/40 dark:text-emerald-300 dark:hover:bg-emerald-500/10"
+                      >
+                        <Wand2 className="h-3 w-3" /> {d.quickFix.label}
                       </button>
                     )}
                     {fixable && (
