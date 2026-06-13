@@ -170,6 +170,16 @@ function pngSize(buf: Buffer): { width: number; height: number } {
   return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
 }
 
+/** Convert amsmath equation tags into a content-tight right-side annotation so
+ *  a tagged align renders inside `aligned` (where \tag is illegal). Mirrors the
+ *  web cleaner in components/editor/mathPreview.ts. */
+function inlineEqnTags(latex: string): string {
+  const strip = (x: string) => x.replace(/\$/g, '').trim();
+  return latex
+    .replace(/\\tag\*\s*\{((?:[^{}]|\{[^{}]*\})*)\}/g, (_m, x) => ` && ${strip(x)}`)
+    .replace(/\\tag\s*\{((?:[^{}]|\{[^{}]*\})*)\}/g, (_m, x) => ` && (${strip(x)})`);
+}
+
 function braceDepth(line: string): number {
   let d = 0;
   for (const ch of line) {
@@ -206,20 +216,19 @@ function snippetDoc(kind: 'tikz' | 'math', latex: string, macroDefs: string, tik
   // mostly centring whitespace and the client could not size the glyphs to the
   // text. A content-tight box keeps display-style glyphs at a knowable scale.
   //
-  // EXCEPTION — equation TAGS. `\tag`/`\intertext` are amsmath display-only:
-  // illegal inside `aligned` or inline `$…$` ("\tag not allowed here"). A tagged
-  // equation therefore needs a REAL numbered environment. align* supports \tag,
-  // &, \\ and adds no spurious numbers on untagged rows; it does span the line
-  // width, but that is exactly how a numbered equation reads in the document.
+  // EQUATION TAGS. `\tag`/`\tag*` are amsmath display-only — illegal inside
+  // `aligned` or inline `$…$` ("\tag not allowed here"). A real numbered
+  // environment would compile but spans the full line width (tag at the far
+  // margin, equation tiny). Instead each tag becomes a right-side annotation
+  // column (\tag{1} → ` && (1)`), so a tagged align stays content-tight AND keeps
+  // its tag. (Inline maths drops tags — they're invalid there.)
   const cleaned = latex.replace(/\\label\s*\{[^}]*\}/g, '').replace(/\\(?:nonumber|notag)\b/g, '');
-  const needsDisplayEnv = /\\(?:tag\*?|intertext)\b/.test(cleaned);
+  const display = !inline ? inlineEqnTags(cleaned) : cleaned;
   const body = inline
-    ? `$${cleaned}$`
-    : needsDisplayEnv
-      ? `\\begin{align*}\n${cleaned}\n\\end{align*}`
-      : /\\\\|&/.test(cleaned)
-        ? `$\\displaystyle\\begin{aligned}\n${cleaned}\n\\end{aligned}$`
-        : `$\\displaystyle ${cleaned}$`;
+    ? `$${cleaned.replace(/\\tag\*?\s*\{(?:[^{}]|\{[^{}]*\})*\}/g, '')}$`
+    : /\\\\|&/.test(display)
+      ? `$\\displaystyle\\begin{aligned}\n${display}\n\\end{aligned}$`
+      : `$\\displaystyle ${display}$`;
   // Near-zero border: the PNG is just the glyphs, so the client can size it
   // 1:1 with the surrounding text.
   return [

@@ -23,7 +23,7 @@ import 'katex/dist/katex.min.css';
 import { api } from '../../lib/api';
 import { useEditorStore } from '../../lib/store';
 import { mimeForPath } from '../../lib/fileKind';
-import { cleanForKatex, katexMacros, KATEX_ERROR_COLOR } from './mathPreview';
+import { cleanForKatex, inlineEqnTags, katexMacros, KATEX_ERROR_COLOR } from './mathPreview';
 import { useIndexVersion } from '../../lib/latexIndex';
 import { latexToBlocks, type VisualBlock } from './visualBlocks';
 import { useVisualGhost, type DocContext } from './visualGhost';
@@ -34,7 +34,9 @@ import { attachTextFieldAutocomplete, useTextFieldAutocomplete, useVisualAutocom
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
 
 function mathHtml(latex: string, display: boolean): string {
-  const cleaned = cleanForKatex(latex);
+  // Display maths turns equation tags into a right-side annotation BEFORE
+  // cleaning, so an align with \tag renders (content-tight) instead of erroring.
+  const cleaned = cleanForKatex(display ? inlineEqnTags(latex) : latex);
   if (!cleaned) return '';
   const body = display && /\\\\|&/.test(cleaned) ? `\\begin{aligned}${cleaned}\\end{aligned}` : cleaned;
   try {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cleanForKatex, mathSpanAt, renderPreview } from '../components/editor/mathPreview';
+import { cleanForKatex, inlineEqnTags, mathSpanAt, renderPreview } from '../components/editor/mathPreview';
 
 const DOC = [
   'Some prose here.', // 0-16
@@ -56,10 +56,10 @@ describe('cleanForKatex + renderPreview', () => {
     expect(el.querySelector('.katex')).toBeTruthy();
   });
 
-  it('strips equation tags (\\tag/\\intertext) — KaTeX throws on them inside aligned', () => {
-    expect(cleanForKatex('E &= mc^2 \\tag{1} \\\\ F &= ma \\tag*{$\\ast$}')).toBe('E &= mc^2  \\\\ F &= ma');
-    expect(cleanForKatex('x = y \\intertext{and then} z = w')).toBe('x = y  z = w');
-    // A tagged align body still renders (no thrown KaTeX error) once tags are gone.
+  it('equation tags become a content-tight annotation (\\tag{1} → && (1)), rendering in aligned', () => {
+    expect(inlineEqnTags('E &= mc^2 \\tag{1} \\\\ F &= ma \\tag{2}')).toBe('E &= mc^2  && (1) \\\\ F &= ma  && (2)');
+    expect(inlineEqnTags('x = y \\tag*{$\\ast$}')).toBe('x = y  && \\ast'); // star = no parens, $ stripped
+    // A tagged align body renders with no thrown KaTeX error (the tag shows).
     const el = renderPreview('E &= mc^2 \\tag{1} \\\\ F &= ma \\tag{2}', true);
     expect(el.querySelector('.katex')).toBeTruthy();
   });

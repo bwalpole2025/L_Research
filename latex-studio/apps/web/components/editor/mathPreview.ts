@@ -89,15 +89,32 @@ export function cleanForKatex(latex: string): string {
   return latex
     .replace(/\\label\s*\{[^}]*\}/g, '')
     .replace(/\\(?:nonumber|notag)\b/g, '')
-    // \tag / \intertext are amsmath display-only — KaTeX throws on them inside an
-    // `aligned` placeholder. Drop them for the instant preview; the real
-    // TeX-engine snippet (which renders an align* environment) keeps the tag.
+    // Bare \tag/\intertext that survive to here (inline maths) are amsmath
+    // display-only — KaTeX throws on them. Display maths transforms tags into
+    // an inline annotation first (see inlineEqnTags), so none reach here.
     .replace(/\\tag\*?\s*\{[^}]*\}/g, '')
     .replace(/\\intertext\s*\{[^}]*\}/g, '')
     .replace(/\\(?:vspace|hspace)\s*\*?\s*\{[^}]*\}/g, '')
     .replace(/\\(?:mbox|hbox)\s*\{([^{}]*)\}/g, '\\text{$1}')
     .replace(/%[^\n]*/g, '')
     .trim();
+}
+
+/**
+ * DISPLAY-MATH EQUATION TAGS. `\tag`/`\tag*` are amsmath display-only commands:
+ * illegal inside an `aligned` body or inline `$…$`. Rather than drop them (so
+ * the tag vanishes) or switch to a full-line-width numbered environment (so the
+ * tag floats to the far margin and the equation looks tiny), convert each tag
+ * into a right-side annotation column — `\tag{1}` → ` && (1)`, `\tag*{x}` → ` && x`
+ * — which renders content-tight inside `aligned` and works in BOTH KaTeX and the
+ * TeX engine. The tag body is taken verbatim (it is already in math mode here,
+ * so a `$…$` wrapper a user added is stripped).
+ */
+export function inlineEqnTags(latex: string): string {
+  const strip = (x: string) => x.replace(/\$/g, '').trim();
+  return latex
+    .replace(/\\tag\*\s*\{((?:[^{}]|\{[^{}]*\})*)\}/g, (_m, x) => ` && ${strip(x)}`)
+    .replace(/\\tag\s*\{((?:[^{}]|\{[^{}]*\})*)\}/g, (_m, x) => ` && (${strip(x)})`);
 }
 
 /** Normalise a macro body so KaTeX can digest it: unwrap \ensuremath (KaTeX has
