@@ -738,11 +738,13 @@ export function TikzDiagramEditor({ fileId, path, content, embedded }: { fileId:
           onPointerUp={onPointerUp}
           onDoubleClick={() => pending.length && finishPending()}
           onWheel={onWheel}
-          style={{ background: 'var(--ls-bg)', cursor: tool === 'select' ? 'default' : 'crosshair' }}
+          style={{ background: '#ffffff', cursor: tool === 'select' ? 'default' : 'crosshair' }}
         >
           <defs>
+            {/* White drawing surface with dark graph-paper dots — fixed (not theme-driven)
+                so plotted curves and imported figures stay clearly visible in dark mode. */}
             <pattern id="dgrid" width={gridStep} height={gridStep} patternUnits="userSpaceOnUse" x={view.tx % gridStep} y={view.ty % gridStep}>
-              <circle cx="0.7" cy="0.7" r="0.7" fill="currentColor" className="text-zinc-300 dark:text-[#243049]" />
+              <circle cx="0.7" cy="0.7" r="0.7" fill="#64748b" />
             </pattern>
           </defs>
           <rect width="100%" height="100%" fill="url(#dgrid)" />
@@ -937,7 +939,7 @@ function Label({ x, y, label, fontSize }: { x: number; y: number; label: string;
     <foreignObject x={x - 100} y={y - 14} width={200} height={28} style={{ pointerEvents: 'none', overflow: 'visible' }}>
       <div
         style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', fontSize: fontSize ?? 13 }}
-        className="text-zinc-800 dark:text-[#eef1f8]"
+        className="text-zinc-800"
         dangerouslySetInnerHTML={{ __html: labelHtml(label) }}
       />
     </foreignObject>
@@ -982,9 +984,9 @@ function ElementView({ el, scene, selected, draft }: { el: DiagramElement; scene
       return (
         <g style={sel} transform={rot} data-testid="dnode">
           {el.shape === 'rect' ? (
-            <rect x={el.x - el.w / 2} y={el.y - el.h / 2} width={el.w} height={el.h} rx={2} {...common} fill={s.fill || 'var(--ls-surface)'} />
+            <rect x={el.x - el.w / 2} y={el.y - el.h / 2} width={el.w} height={el.h} rx={2} {...common} fill={s.fill || '#ffffff'} />
           ) : (
-            <ellipse cx={el.x} cy={el.y} rx={el.w / 2} ry={el.shape === 'circle' ? el.w / 2 : el.h / 2} {...common} fill={s.fill || 'var(--ls-surface)'} />
+            <ellipse cx={el.x} cy={el.y} rx={el.w / 2} ry={el.shape === 'circle' ? el.w / 2 : el.h / 2} {...common} fill={s.fill || '#ffffff'} />
           )}
           <Label x={el.x} y={el.y} label={el.label} fontSize={s.fontSize} />
         </g>
@@ -1012,7 +1014,7 @@ function ElementView({ el, scene, selected, draft }: { el: DiagramElement; scene
       return (
         <g style={sel}>
           <foreignObject x={el.x} y={el.y - 10} width={300} height={24} style={{ pointerEvents: 'none', overflow: 'visible' }}>
-            <div style={{ fontSize: el.style.fontSize ?? 13, color: el.style.stroke || undefined }} className="text-zinc-800 dark:text-[#eef1f8]" dangerouslySetInnerHTML={{ __html: labelHtml(el.label) }} />
+            <div style={{ fontSize: el.style.fontSize ?? 13, color: el.style.stroke || undefined }} className="text-zinc-800" dangerouslySetInnerHTML={{ __html: labelHtml(el.label) }} />
           </foreignObject>
         </g>
       );
@@ -1020,7 +1022,7 @@ function ElementView({ el, scene, selected, draft }: { el: DiagramElement; scene
       return (
         <g style={sel}>
           <rect x={el.x} y={el.y} width={el.w} height={el.h} fill="rgba(78,104,245,0.06)" stroke="#4e68f5" strokeDasharray="5 4" strokeWidth={1} />
-          <text x={el.x + 6} y={el.y + 16} fontSize={11} className="fill-zinc-500 dark:fill-[#8fa3ff]" style={{ fontFamily: 'var(--ls-mono)' }}>
+          <text x={el.x + 6} y={el.y + 16} fontSize={11} className="fill-zinc-500" style={{ fontFamily: 'var(--ls-mono)' }}>
             raw TikZ (exported verbatim)
           </text>
         </g>
@@ -1033,7 +1035,7 @@ function ElementView({ el, scene, selected, draft }: { el: DiagramElement; scene
           ) : (
             <>
               <rect x={el.x} y={el.y} width={el.w} height={el.h} fill="rgba(69,184,158,0.06)" stroke="#45b89e" strokeDasharray="5 4" strokeWidth={1} />
-              <text x={el.x + 6} y={el.y + 16} fontSize={11} className="fill-zinc-500 dark:fill-[#7fd8c4]">
+              <text x={el.x + 6} y={el.y + 16} fontSize={11} className="fill-zinc-500">
                 plot: {el.source.type === 'function' ? el.source.expr : 'data'} — Run plots to generate
               </text>
             </>

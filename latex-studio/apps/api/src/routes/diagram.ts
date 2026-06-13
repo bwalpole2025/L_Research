@@ -191,9 +191,13 @@ export async function diagramRoutes(app: FastifyInstance): Promise<void> {
         let previewPdf = pdf;
         try {
           const previewBase = `gpprev${runId}`;
+          // xcolor is REQUIRED: the cairolatex overlay calls \definecolor{tbcol}
+          // (its text-background colour). Without it \definecolor is undefined and
+          // nonstop mode typesets the arguments as the literal "tbcolrgb1,1,1" in
+          // the corner. (The typeset preview loads xcolor via tikz already.)
           const previewDoc = [
             '\\documentclass[border=2pt]{standalone}',
-            '\\usepackage{amsmath,amssymb,graphicx}',
+            '\\usepackage{amsmath,amssymb,graphicx,xcolor}',
             '\\begin{document}',
             `\\input{${outBase}.tex}`,
             '\\end{document}',
