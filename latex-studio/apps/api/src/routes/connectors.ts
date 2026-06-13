@@ -1,10 +1,11 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
-import type { ConnectorConnectResult, ConnectorStatus } from '@latex-studio/shared';
+import type { ConnectorConnectResult, ConnectorStatus, StorageConnector } from '@latex-studio/shared';
 import { connectorStatus, listConnectors } from '../connectors/registry.js';
 import { getManifest, oauthAppKey, oauthRedirectUri, resolveOAuthConfig } from '../connectors/manifest.js';
 import { literatureSource, LiteratureSourceError } from '../literature/sources/index.js';
 import { storageConnector, StorageConnectorError } from '../storage/sources/index.js';
+import { isBinaryPath, validateFilePath } from '../lib/paths.js';
 import {
   OAuthError,
   beginAuthorization,
@@ -26,6 +27,12 @@ import {
 
 const apiKeyBody = z.object({ apiKey: z.string().min(1) });
 const oauthAppBody = z.object({ clientId: z.string().trim().min(1), clientSecret: z.string().trim().min(1) });
+// Import a storage file INTO the project: `fileId` is the provider file id, `path`
+// is the project-relative destination (validated/whitelisted like any project file).
+const storageImportBody = z.object({ fileId: z.string().min(1), path: z.string().min(1).max(512) });
+// Upload a project file TO storage: `fileId` is the project TexFile, `parentFolderId`
+// the destination folder id ('' / 'root' / omitted ⇒ the provider's top level).
+const storageUploadBody = z.object({ fileId: z.string().min(1), parentFolderId: z.string().optional() });
 
 export async function connectorRoutes(app: FastifyInstance): Promise<void> {
   // List all connectors with live status.
@@ -79,6 +86,80 @@ export async function connectorRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(502).send({ error: err instanceof Error ? err.message : 'List failed' });
     }
   });
+
+  // ── Import a storage file INTO a project ──────────────────────────────────────
+  // Reads the provider file server-side and stores it as a project file (utf8 for
+  // text, base64 for binary). Upserts by path so re-importing refreshes in place.
+  app.post<{ Params: { projectId: string; id: string }; Body: unknown }>(
+    '/projects/:projectId/storage/:id/import',
+    async (request, reply) => {
+      const project = await app.prisma.project.findUnique({ where: { id: request.params.projectId } });
+      if (!project) return reply.callNotFound();
+      const parsed = storageImportBody.safeParse(request.body);
+      if (!parsed.success) return reply.code(400).send({ error: 'Invalid body', details: parsed.error.flatten() });
+      const check = validateFilePath(parsed.data.path);
+      if (!check.ok) return reply.code(400).send({ error: check.error });
+
+      const conn = await resolveStorage(app, request.params.id, reply);
+      if (!conn) return reply; // resolveStorage already sent the error response
+
+      let bytes: Uint8Array;
+      try {
+        bytes = await conn.read(parsed.data.fileId);
+      } catch (err) {
+        if (err instanceof StorageConnectorError) return reply.code(409).send({ error: err.message, kind: 'needs_connect' });
+        return reply.code(502).send({ error: err instanceof Error ? err.message : 'Import failed' });
+      }
+
+      const binary = isBinaryPath(parsed.data.path);
+      const buf = Buffer.from(bytes);
+      const content = binary ? buf.toString('base64') : buf.toString('utf8');
+      const encoding = binary ? 'base64' : 'utf8';
+      const existing = await app.prisma.texFile.findUnique({ where: { projectId_path: { projectId: project.id, path: parsed.data.path } } });
+      const file = existing
+        ? await app.prisma.texFile.update({ where: { id: existing.id }, data: { content, encoding } })
+        : await app.prisma.texFile.create({ data: { projectId: project.id, path: parsed.data.path, content, encoding } });
+      await app.vault.touchLastUsed(request.params.id).catch(() => undefined);
+      return reply.code(existing ? 200 : 201).send({
+        id: file.id,
+        projectId: file.projectId,
+        path: file.path,
+        encoding: file.encoding,
+        updatedAt: file.updatedAt.toISOString(),
+      });
+    },
+  );
+
+  // ── Upload a project file TO storage ──────────────────────────────────────────
+  // Reads the project file server-side and writes its bytes to the provider under
+  // its basename, in the chosen folder (default: the provider's top level).
+  app.post<{ Params: { projectId: string; id: string }; Body: unknown }>(
+    '/projects/:projectId/storage/:id/upload',
+    async (request, reply) => {
+      const project = await app.prisma.project.findUnique({ where: { id: request.params.projectId } });
+      if (!project) return reply.callNotFound();
+      const parsed = storageUploadBody.safeParse(request.body);
+      if (!parsed.success) return reply.code(400).send({ error: 'Invalid body', details: parsed.error.flatten() });
+      const file = await app.prisma.texFile.findFirst({ where: { id: parsed.data.fileId, projectId: project.id } });
+      if (!file) return reply.callNotFound();
+
+      const conn = await resolveStorage(app, request.params.id, reply);
+      if (!conn) return reply;
+
+      const bytes = file.encoding === 'base64' ? Buffer.from(file.content, 'base64') : Buffer.from(file.content, 'utf8');
+      const name = file.path.split('/').pop() ?? file.path;
+      const parent = parsed.data.parentFolderId?.trim();
+      const target = parent && parent !== 'root' ? `${parent}/${name}` : name;
+      try {
+        const entry = await conn.write(target, new Uint8Array(bytes));
+        await app.vault.touchLastUsed(request.params.id).catch(() => undefined);
+        return { entry };
+      } catch (err) {
+        if (err instanceof StorageConnectorError) return reply.code(409).send({ error: err.message, kind: 'needs_connect' });
+        return reply.code(502).send({ error: err instanceof Error ? err.message : 'Upload failed' });
+      }
+    },
+  );
 
   // Begin a connection.
   app.post<{ Params: { id: string } }>('/connectors/:id/connect', async (request, reply) => {
@@ -200,6 +281,23 @@ export async function connectorRoutes(app: FastifyInstance): Promise<void> {
 /** Wrap a possibly-null status into a ConnectorConnectResult (no `undefined` field). */
 function statusResult(status: ConnectorStatus | null): ConnectorConnectResult {
   return status ? { status } : {};
+}
+
+/**
+ * Resolve a storage adapter, or send the right error response and return null:
+ * 404 for an unknown connector, 409 ("needs connect") for one that isn't linked.
+ * Callers return `reply` immediately when this yields null.
+ */
+async function resolveStorage(app: FastifyInstance, id: string, reply: FastifyReply): Promise<StorageConnector | null> {
+  try {
+    return await storageConnector(app, id);
+  } catch (err) {
+    if (err instanceof StorageConnectorError) {
+      void reply.code(err.kind === 'needs_connect' ? 409 : 404).send({ error: err.message, kind: err.kind });
+      return null;
+    }
+    throw err;
+  }
 }
 
 /**

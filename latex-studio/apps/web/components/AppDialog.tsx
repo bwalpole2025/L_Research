@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useDialogStore } from '@/lib/dialogStore';
+import { useFocusTrap } from '@/lib/a11y';
 
 /**
  * Renders the active in-app dialog (see lib/dialogStore) — a themed replacement
@@ -14,6 +15,8 @@ export function AppDialog() {
   const [value, setValue] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(Boolean(active), panelRef);
 
   // Seed the input + move focus when a dialog opens.
   useEffect(() => {
@@ -54,6 +57,7 @@ export function AppDialog() {
       data-testid="app-dialog"
     >
       <div
+        ref={panelRef}
         role="dialog"
         aria-modal="true"
         aria-label={active.title}

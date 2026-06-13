@@ -4,7 +4,7 @@ import { Decoration, type DecorationSet, EditorView, WidgetType, keymap } from '
 export interface Prediction {
   from: number;
   text: string;
-  kind: 'prose' | 'maths' | 'structural';
+  kind: 'prose' | 'maths' | 'structural' | 'code';
 }
 
 export interface PredictConfig {

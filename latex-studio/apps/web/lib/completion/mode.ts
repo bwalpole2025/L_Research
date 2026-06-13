@@ -14,7 +14,7 @@ const DISPLAY_ENV =
  * `stex` mode (no Lezer tree), so we read the surrounding text directly
  * (ADR-006): preamble vs display-align vs inline-math vs prose.
  */
-export function detectMode(doc: string, pos: number): ModeInfo {
+export function detectMode(doc: string, pos: number, isPython = false): ModeInfo {
   const p = Math.max(0, Math.min(doc.length, pos));
   const before = doc.slice(0, p);
   const after = doc.slice(p);
@@ -24,6 +24,12 @@ export function detectMode(doc: string, pos: number): ModeInfo {
   const charBefore = before.slice(-1);
   const charAfter = after.slice(0, 1);
   const midWord = /\w/.test(charBefore) && /\w/.test(charAfter);
+
+  // Python files have a single mode; a '#' before the cursor on this line marks a comment.
+  if (isPython) {
+    return { mode: 'python-code', inComment: lineBefore.includes('#'), midWord };
+  }
+
   const inComment = hasUnescapedPercent(lineBefore);
 
   const docBegin = doc.indexOf('\\begin{document}');

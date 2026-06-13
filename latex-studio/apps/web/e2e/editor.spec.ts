@@ -57,3 +57,36 @@ test('save indicator cycles dirty → saving → saved while editing', async ({ 
   await expect(indicator).toHaveAttribute('data-status', 'saving');
   await expect(indicator).toHaveAttribute('data-status', 'saved');
 });
+
+test('LaTeX code folding: sections and environments fold/unfold via the gutter', async ({ page }) => {
+  const FOLDABLE =
+    '\\documentclass{article}\n\\begin{document}\n\\section{Intro}\nfirst body line\nsecond body line\n\\begin{align}\na &= b \\\\\nc &= d\n\\end{align}\n\\end{document}\n';
+  await page.route('**/api/**', async (route) => {
+    const path = new URL(route.request().url()).pathname.replace(/^\/api/, '');
+    const method = route.request().method();
+    if (method === 'GET' && path === '/projects') return json(route, [PROJECT]);
+    if (method === 'GET' && path === '/projects/p1/files') return json(route, [FILE_META]);
+    if (method === 'GET' && path === '/projects/p1/snapshots') return json(route, []);
+    if (method === 'GET' && path === '/files/f1') return json(route, { ...FILE_META, content: FOLDABLE });
+    if (method === 'PATCH' && path === '/files/f1') return json(route, { content: '' });
+    return json(route, { error: `unmocked ${method} ${path}` }, 404);
+  });
+
+  await page.goto('/studio');
+  await expect(page.locator('.cm-content')).toBeVisible();
+
+  // A fold gutter is present with open (▾) markers for the section + environment.
+  await expect(page.locator('.cm-foldGutter')).toBeVisible();
+  const openMarkers = page.locator('.cm-foldGutter .cm-gutterElement', { hasText: '▾' });
+  await expect(openMarkers.first()).toBeVisible();
+
+  // Folding the section hides its body (a fold placeholder appears).
+  await openMarkers.first().click();
+  await expect(page.locator('.cm-foldPlaceholder')).toHaveCount(1);
+  await expect(page.locator('.cm-content')).not.toContainText('first body line');
+
+  // Unfolding (click the fold placeholder) restores the body.
+  await page.locator('.cm-foldPlaceholder').first().click();
+  await expect(page.locator('.cm-foldPlaceholder')).toHaveCount(0);
+  await expect(page.locator('.cm-content')).toContainText('first body line');
+});

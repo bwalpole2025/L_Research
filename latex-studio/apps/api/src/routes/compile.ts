@@ -70,10 +70,14 @@ export async function compileRoutes(app: FastifyInstance): Promise<void> {
     // serving, SyncTeX, review and verify all agree.
     const resolved = await resolveAndPersistRoot(app.prisma, project.id, project.rootFile, files);
 
+    const engine = (['pdflatex', 'xelatex', 'lualatex'] as const).includes(project.texEngine as 'pdflatex')
+      ? (project.texEngine as 'pdflatex' | 'xelatex' | 'lualatex')
+      : 'pdflatex';
     const result = await svc.compile({
       projectId: project.id,
       rootFile: resolved.rootFile,
       files,
+      options: { engine, haltOnError: project.haltOnError, draftMode: project.draftMode },
     });
 
     if (resolved.fellBack && result.status !== 'superseded') {
@@ -102,6 +106,20 @@ export async function compileRoutes(app: FastifyInstance): Promise<void> {
     }
 
     return result;
+  });
+
+  // LaTeX-aware word count (texcount): total + per-file/included-file breakdown.
+  app.get<{ Params: { id: string } }>('/projects/:id/wordcount', async (request, reply) => {
+    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
+    if (!project) return reply.callNotFound();
+    const files = await app.prisma.texFile.findMany({
+      where: { projectId: project.id },
+      select: { path: true, content: true, encoding: true },
+    });
+    // Count against the resolved root so \input/\include are followed correctly
+    // (and a pristine-seed / missing root falls back like a compile would).
+    const resolved = await resolveAndPersistRoot(app.prisma, project.id, project.rootFile, files);
+    return svc.wordCount(project.id, resolved.rootFile, files);
   });
 
   // Serve the produced PDF (authenticated — this route is behind the bearer hook).

@@ -4,10 +4,12 @@ import type {
   CompileResponse,
   SyncForwardResult,
   SyncInverseResult,
+  WordCountResult,
 } from '@latex-studio/shared';
 import type { AppConfig } from '../config.js';
-import { createRunner, type ProjectFileInput, type TexliveRunner } from './runner.js';
+import { createRunner, type CompileOptions, type ProjectFileInput, type TexliveRunner } from './runner.js';
 import { parseLatexLog } from './logParser.js';
+import { parseTexcount } from './texcount.js';
 import { parseSynctexEdit, parseSynctexView } from './synctexParser.js';
 import { CompileQueue } from './queue.js';
 
@@ -15,13 +17,15 @@ export interface CompileInput {
   projectId: string;
   rootFile: string;
   files: ProjectFileInput[];
+  /** Engine + halt-on-error + draft (from the project's compile settings). */
+  options?: CompileOptions;
 }
 
 const SUPERSEDED: CompileResponse = { status: 'superseded', diagnostics: [], durationMs: 0 };
 
 /** Orchestrates staging → latexmk → log parsing, queued one-per-project. */
 export class CompileService {
-  private readonly queue = new CompileQueue<CompileResponse>();
+  private readonly queue: CompileQueue<CompileResponse>;
   private readonly runner: TexliveRunner;
 
   constructor(
@@ -29,6 +33,9 @@ export class CompileService {
     runner?: TexliveRunner,
   ) {
     this.runner = runner ?? createRunner(config);
+    // Global cap on concurrent document compiles (per-project serialization is
+    // intrinsic to the queue's per-key design — the per-project throttle).
+    this.queue = new CompileQueue<CompileResponse>(config.compileMaxConcurrent);
   }
 
   private base(rootFile: string): string {
@@ -67,6 +74,14 @@ export class CompileService {
     return this.runner.artifactPath(projectId, `${this.base(rootFile)}.synctex.gz`);
   }
 
+  /** LaTeX-aware word count via texcount (follows \input/\include with -inc).
+   *  Stages the project files first so the included files exist on disk. */
+  async wordCount(projectId: string, rootFile: string, files: ProjectFileInput[]): Promise<WordCountResult> {
+    await this.runner.writeFiles(projectId, files);
+    const result = await this.runner.texcount(projectId, ['-inc', '-brief', '-utf8', rootFile]);
+    return parseTexcount(result.stdout);
+  }
+
   compile(input: CompileInput): Promise<CompileResponse> {
     return this.queue.submit(input.projectId, () => this.runCompile(input), SUPERSEDED);
   }
@@ -77,7 +92,7 @@ export class CompileService {
 
     try {
       await this.runner.writeFiles(input.projectId, input.files);
-      const result = await this.runner.latexmk(input.projectId, input.rootFile);
+      const result = await this.runner.latexmk(input.projectId, input.rootFile, input.options);
 
       const logText = await this.readLog(
         input.projectId,

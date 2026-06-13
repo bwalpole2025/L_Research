@@ -21,7 +21,7 @@ interface Persisted {
 
 const DEFAULTS: Persisted = {
   enabled: true,
-  perMode: { prose: true, 'inline-math': true, 'display-align': true, preamble: true },
+  perMode: { prose: true, 'inline-math': true, 'display-align': true, preamble: true, 'python-code': true },
   debounceMs: 400,
   model: 'claude-haiku-4-5',
   provider: 'agent-sdk',

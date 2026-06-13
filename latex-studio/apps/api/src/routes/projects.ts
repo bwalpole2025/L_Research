@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { getModels } from '../ai/models.js';
 import { isAcceptableModel } from '../providers/index.js';
 import { DEFAULT_MAIN_TEX } from '../lib/seedTemplate.js';
+import { hardDeleteProject } from '../lib/hardDelete.js';
 
 const createProjectBody = z.object({
   name: z.string().trim().min(1).max(200),
@@ -25,6 +26,10 @@ const updateProjectBody = z.object({
   // Python "Run" settings.
   pythonRunTarget: z.string().max(512).optional(),
   networkEnabled: z.boolean().optional(),
+  // Compile settings.
+  texEngine: z.enum(['pdflatex', 'xelatex', 'lualatex']).optional(),
+  haltOnError: z.boolean().optional(),
+  draftMode: z.boolean().optional(),
 });
 
 /** Serialise a Project row to the shared `Project` shape (ISO timestamps). */
@@ -44,6 +49,9 @@ function serialiseProject(p: {
   networkEnabled: boolean;
   archivedAt: Date | null;
   deletedAt: Date | null;
+  texEngine: string;
+  haltOnError: boolean;
+  draftMode: boolean;
 }) {
   return {
     id: p.id,
@@ -61,6 +69,9 @@ function serialiseProject(p: {
     networkEnabled: p.networkEnabled ?? false,
     archivedAt: p.archivedAt ? p.archivedAt.toISOString() : null,
     deletedAt: p.deletedAt ? p.deletedAt.toISOString() : null,
+    texEngine: p.texEngine ?? 'pdflatex',
+    haltOnError: p.haltOnError ?? false,
+    draftMode: p.draftMode ?? false,
   };
 }
 
@@ -115,7 +126,8 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
     const existing = await app.prisma.project.findUnique({ where: { id: request.params.id }, select: { id: true, deletedAt: true } });
     if (!existing) return reply.callNotFound();
     if (!existing.deletedAt) return reply.code(409).send({ error: 'Move the project to Trash before deleting it permanently.' });
-    await app.prisma.project.delete({ where: { id: existing.id } });
+    // Erasure: cascade DB rows + non-FK rows + the on-disk workspace (see hardDelete).
+    await hardDeleteProject(app, existing.id);
     return { ok: true };
   });
 
@@ -123,7 +135,7 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
   // their own trash (/project-trash); this is projects only.
   app.delete('/projects-trash/purge', async () => {
     const doomed = await app.prisma.project.findMany({ where: { deletedAt: { not: null } }, select: { id: true } });
-    for (const p of doomed) await app.prisma.project.delete({ where: { id: p.id } }).catch(() => undefined);
+    for (const p of doomed) await hardDeleteProject(app, p.id).catch(() => undefined);
     return { ok: true, removed: doomed.length };
   });
 
@@ -181,6 +193,9 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
     if (parsed.data.aiProvider !== undefined) data.aiProvider = parsed.data.aiProvider;
     if (parsed.data.pythonRunTarget !== undefined) data.pythonRunTarget = parsed.data.pythonRunTarget;
     if (parsed.data.networkEnabled !== undefined) data.networkEnabled = parsed.data.networkEnabled;
+    if (parsed.data.texEngine !== undefined) data.texEngine = parsed.data.texEngine;
+    if (parsed.data.haltOnError !== undefined) data.haltOnError = parsed.data.haltOnError;
+    if (parsed.data.draftMode !== undefined) data.draftMode = parsed.data.draftMode;
     if (parsed.data.model !== undefined) {
       const { models } = await getModels(app.config.model);
       if (!isAcceptableModel(parsed.data.model, models)) {

@@ -10,7 +10,7 @@ import type { CompletionResult } from '../lib/types';
 function cfg(over?: Partial<CompletionConfig>): CompletionConfig {
   return {
     enabled: true,
-    perMode: { prose: true, 'inline-math': true, 'display-align': true, preamble: true },
+    perMode: { prose: true, 'inline-math': true, 'display-align': true, preamble: true, 'python-code': true },
     debounceMs: 400,
     model: 'claude-haiku-4-5',
     provider: 'agent-sdk',
@@ -91,7 +91,7 @@ describe('suggestion helpers', () => {
   it('shouldTrigger respects enabled, per-mode, comment-mid-word, and post-reject', () => {
     expect(shouldTrigger(ctx(1), cfg(), null)).toBe(true);
     expect(shouldTrigger(ctx(1), cfg({ enabled: false }), null)).toBe(false);
-    expect(shouldTrigger(ctx(1, { mode: 'prose' }), cfg({ perMode: { prose: false, 'inline-math': true, 'display-align': true, preamble: true } }), null)).toBe(false);
+    expect(shouldTrigger(ctx(1, { mode: 'prose' }), cfg({ perMode: { prose: false, 'inline-math': true, 'display-align': true, preamble: true, 'python-code': true } }), null)).toBe(false);
     expect(shouldTrigger(ctx(1, { inComment: true, midWord: true }), cfg(), null)).toBe(false);
     expect(shouldTrigger(ctx(7), cfg(), 7)).toBe(false);
   });

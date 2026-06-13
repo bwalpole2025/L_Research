@@ -37,8 +37,9 @@ export class CompletionController {
         const pid = this.getProjectId();
         if (!pid) return Promise.reject(new Error('no project'));
         // Document-aware: include the CACHED card + cheap position (never a rebuild here).
+        // The card carries LaTeX notation, so it's irrelevant/harmful for Python — skip it there.
         const dm = useDocumentModelStore.getState();
-        if (dm.enabled && dm.card) {
+        if (dm.enabled && dm.card && req.mode !== 'python-code') {
           const position = this.view ? computePosition(this.view) : undefined;
           return completeCode(pid, { ...req, contextCard: dm.card, ...(position ? { position } : {}) }, signal);
         }
@@ -171,7 +172,10 @@ export class CompletionController {
     const doc = view.state.doc;
     const before = doc.sliceString(0, pos);
     const after = doc.sliceString(pos);
-    const { mode, inComment, midWord } = detectMode(doc.toString(), pos);
+    const ed = useEditorStore.getState();
+    const activePath = ed.files.find((f) => f.id === ed.activeFileId)?.path ?? '';
+    const isPython = activePath.toLowerCase().endsWith('.py');
+    const { mode, inComment, midWord } = detectMode(doc.toString(), pos, isPython);
     return {
       prefix: before.slice(-PREFIX_CHARS),
       suffix: after.slice(0, SUFFIX_CHARS),

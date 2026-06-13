@@ -1,6 +1,6 @@
 'use client';
 
-import { FileText, X } from 'lucide-react';
+import { FileText, Loader2, X } from 'lucide-react';
 import { useEditorStore } from '@/lib/store';
 import { basename } from '@/lib/treeUtils';
 
@@ -23,7 +23,7 @@ export function EditorTabs() {
         const file = files.find((f) => f.id === id);
         if (!file) return null;
         const active = id === activeFileId;
-        const dirty = status[id] === 'dirty' || status[id] === 'saving';
+        const st = status[id];
         return (
           <div
             key={id}
@@ -40,10 +40,17 @@ export function EditorTabs() {
           >
             <FileText className={`h-3.5 w-3.5 shrink-0 ${active ? 'text-blue-500' : 'text-zinc-400'}`} />
             <span className="truncate font-medium">{basename(file.path)}</span>
-            <span
-              className={`h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400 ${dirty ? '' : 'invisible'}`}
-              aria-hidden
-            />
+            {st === 'saving' ? (
+              // In progress → spinner; dirty → amber dot; error → red dot; saved → nothing.
+              <Loader2 className="h-3 w-3 shrink-0 animate-spin text-amber-500" aria-label="Saving" />
+            ) : (
+              <span
+                className={`h-1.5 w-1.5 shrink-0 rounded-full ${st === 'error' ? 'bg-red-500' : 'bg-amber-400'} ${st === 'dirty' || st === 'error' ? '' : 'invisible'}`}
+                role={st === 'error' || st === 'dirty' ? 'img' : undefined}
+                aria-label={st === 'error' ? 'Save failed' : st === 'dirty' ? 'Unsaved changes' : undefined}
+                aria-hidden={st === 'error' || st === 'dirty' ? undefined : true}
+              />
+            )}
             <button
               type="button"
               onMouseDown={(e) => {

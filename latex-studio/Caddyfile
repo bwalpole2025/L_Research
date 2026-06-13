@@ -1,0 +1,34 @@
+# LaTeX Studio — private front door (see docs/self-hosting.md).
+#
+# Caddy is the ONLY published service, and docker-compose.prod.yml binds its port
+# to your tunnel interface only (${TUNNEL_BIND_ADDR}). It terminates the
+# connection and reverse-proxies to the internal `web` container, which serves
+# the app AND proxies /api/* to the api (injecting the bearer server-side). The
+# web and api containers are never published to the host.
+#
+# TLS: `tls internal` uses Caddy's own local CA (a self-signed cert for the
+# tunnel hostname). That's fine inside a VPN — WireGuard/Tailscale already
+# encrypt the transport — but browsers will warn until you trust Caddy's root on
+# each client (docs/self-hosting.md → "TLS"). To skip TLS entirely, change the
+# site address from `{$TUNNEL_HOSTNAME}` to `http://{$TUNNEL_HOSTNAME}` (the
+# tunnel still encrypts on the wire).
+
+{
+	# This host is private — there is no public ACME challenge path, so do not try
+	# to fetch a public Let's Encrypt cert. The admin API is off (not needed).
+	admin off
+}
+
+{$TUNNEL_HOSTNAME}:8443 {
+	tls internal
+
+	encode zstd gzip
+
+	# Let the api enforce the authoritative 24 MB body limit (base64 uploads can be
+	# ~33% larger than the file); reject anything absurd before it reaches Node.
+	request_body {
+		max_size 32MB
+	}
+
+	reverse_proxy web:3000
+}

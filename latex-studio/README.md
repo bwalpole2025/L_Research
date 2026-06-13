@@ -1,13 +1,51 @@
 # LaTeX Studio
 
 A single-user, locally-hosted LaTeX editing application — your own personal
-Overleaf. It runs entirely on your machine: a Next.js editor, a Fastify API that
-compiles documents with `latexmk` and proxies AI requests to Claude, and a small
-Python service that verifies math with SymPy.
+Overleaf, **plus a machine-verification edge Overleaf doesn't have**. It runs
+entirely on your machine: a Next.js editor, a Fastify API that compiles with
+`latexmk` and routes AI through the Claude Agent SDK (or the ChatGPT/Gemini CLIs)
+**over your own subscription, no API key**, a Python service that verifies maths
+with SymPy, and a sandboxed Python runner for figures.
 
-> **Status:** scaffolding only. The workspaces are wired together, all services
-> expose `/healthz`, and there is one passing smoke test per app. No editor /
-> compilation / AI features are implemented yet.
+> **Status:** working application, not a scaffold. The editor, real `latexmk`
+> compilation with bidirectional SyncTeX, the pdf.js viewer, AI assistance, the
+> SymPy maths-verification stack, the diagram tools and the project/library
+> management are all implemented and covered by tests (≈36 API test files, ≈21
+> Playwright e2e specs, ≈19 web unit tests). Architecture decisions are recorded
+> in [`docs/decisions.md`](docs/decisions.md) (ADR-001…015).
+
+## At a glance
+
+- **Editor** — CodeMirror 6 with LaTeX (`stex`) + Python highlighting, offline
+  IDE autocomplete (commands · context-aware cite/ref/begin · snippets · your own
+  macros/packages), AI ghost-text and multi-line "predict next", **code folding**
+  (sections and environments), find & replace, multiple cursors, live KaTeX math
+  preview, and a **Visual** rich-text mode. (ADR-001/002/006/011)
+- **Compile** — `latexmk` in a TeX Live container, **engine selectable per
+  project** (pdfLaTeX / XeLaTeX / LuaLaTeX), with **stop-on-first-error** and
+  **draft/fast** toggles, compile-on-save, queued one-per-project, and
+  **bidirectional SyncTeX**. (ADR-003)
+- **PDF viewer** — pdf.js with zoom / fit-width / page nav / dark+invert modes /
+  download, SyncTeX forward+inverse, and orange/yellow/violet problem highlights.
+- **Diagnostics** — Overleaf-style three tiers (the "red == no PDF" rule), gutter
+  squiggles, a Problems panel, raw-log view, deterministic one-click fixes
+  (e.g. "Add amsmath") and "Fix with Claude".
+- **Maths verification (the differentiator)** — SymPy "Check derivation", a maths
+  **audit**, **co-derivation** (the LLM proposes, SymPy decides), an annotated
+  **document review**, and document-aware predictive maths. (ADR-007/008/009/011)
+- **Files & projects** — per-project file tree, drag-drop upload, rename/move,
+  **project ZIP export** (optionally with the compiled PDF and literature PDFs),
+  **word count** (texcount), snapshots, and a Home explorer with nestable folders,
+  **archive** and **trash**. (ADR-010)
+- **Python** — a sandboxed **Run** for figures, separate from compilation, plus an
+  AI + deterministic Python error check. (ADR-013)
+- **Diagrams** — a scene-first **TikZ diagram editor** with sandboxed GNUplot and a
+  data-driven, compile-proven maths-template catalogue. (ADR-014/015)
+- **Connectors (no API keys)** — Claude/ChatGPT/Gemini via their CLIs; Google
+  Drive / Dropbox / OneDrive / Notion storage; arXiv / CrossRef / Zotero /
+  Semantic Scholar literature search into a RAG-indexed library. (ADR-010/012)
+- **Authoring aids** — LaTeX-aware prose/spell check, a live outline,
+  cross-reference health, and a pre-submit dashboard. (ADR-007)
 
 ---
 
@@ -17,25 +55,28 @@ Python service that verifies math with SymPy.
                     ┌─────────────────────────────────────────────┐
                     │                 apps/web                     │
                     │        Next.js 14 · React · Tailwind         │
-                    │   editor · PDF viewer · AI panel · math UI   │
+                    │  editor · PDF viewer · AI · maths/diagram UI │
+                    │  Home · references · library · connectors    │
                     └──────────────────┬──────────────────────────┘
-                                       │  HTTP  (Bearer token)
+                                       │  HTTP  (Bearer token, via /api proxy)
                                        ▼
                     ┌─────────────────────────────────────────────┐
                     │                 apps/api                     │
                     │            Fastify · TypeScript              │
-                    │   projects · compile · ai proxy · mathproxy  │
-                    └────┬──────────────┬──────────────┬───────────┘
-              Prisma     │      docker  │ exec + vol    │  HTTP
-                         ▼              ▼               ▼
-                 ┌──────────────┐ ┌──────────────┐ ┌────────────────────┐
-                 │   postgres   │ │   texlive    │ │ services/mathcheck │
-                 │ projects,    │ │  latexmk ⇒   │ │  FastAPI · SymPy    │
-                 │ files, logs, │ │    PDF       │ │  POST /verify      │
-                 │ snapshots    │ │ compile-vol  │ │                    │
-                 └──────────────┘ └──────────────┘ └────────────────────┘
+                    │ projects · compile · synctex · ai · library  │
+                    │ coderive · review · thesis · run · connectors│
+                    └──┬───────────┬───────────┬───────────┬───────┘
+          Prisma       │   docker  │ exec+vol  │  HTTP     │  docker run --rm
+                       ▼           ▼           ▼           ▼
+            ┌──────────────┐ ┌──────────┐ ┌──────────────┐ ┌──────────────┐
+            │   postgres   │ │ texlive  │ │   mathcheck  │ │    pyrun     │
+            │ projects,    │ │ latexmk  │ │ FastAPI·SymPy│ │ sandboxed    │
+            │ files, logs, │ │ pdf/Xe/  │ │ verify ·     │ │ Python +     │
+            │ snapshots,   │ │ Lua ⇒PDF │ │ pdf extract/ │ │ gnuplot      │
+            │ library, …   │ │ ·synctex │ │ annotate     │ │ (no network) │
+            └──────────────┘ └──────────┘ └──────────────┘ └──────────────┘
 
-                  apps/api  ──────── HTTPS ────────▶  api.anthropic.com (Claude)
+      apps/api ── Agent SDK / vendor CLIs ──▶ Claude · ChatGPT · Gemini (subscription)
 
                  packages/shared — TypeScript types shared by web + api
 ```
@@ -44,10 +85,11 @@ Python service that verifies math with SymPy.
 
 | Path                  | Stack                                   | Purpose                                            |
 | --------------------- | --------------------------------------- | -------------------------------------------------- |
-| `apps/web`            | Next.js 14 (App Router), TS, Tailwind   | The editor UI.                                     |
-| `apps/api`            | Fastify, TS, Prisma                     | Projects, compilation, AI proxy, mathcheck proxy.  |
-| `services/mathcheck`  | Python 3.12, FastAPI, SymPy             | Math verification microservice.                    |
-| `packages/shared`     | TypeScript                              | Shared types (`Project`, `TexFile`, `CompileResult`, `Diagnostic`, `CompletionRequest`, `MathCheckRequest/Result`, …). |
+| `apps/web`            | Next.js 14 (App Router), TS, Tailwind   | Editor + Home/references/library/connectors pages. |
+| `apps/api`            | Fastify, TS, Prisma                     | Projects, compile/SyncTeX, AI, maths verification, library, diagram, run, connectors. |
+| `services/mathcheck`  | Python 3.12, FastAPI, SymPy, PyMuPDF    | Maths verification + PDF text-extract / annotate.  |
+| `services/pyrun`      | Python sandbox image (+ gnuplot)        | The sandboxed "Run" and GNUplot images (ADR-013/014). |
+| `packages/shared`     | TypeScript                              | Shared types (`Project`, `TexFile`, `CompileResult`, `Diagnostic`, `WordCountResult`, `TexEngine`, `MathParseResult`, …). |
 
 ---
 
@@ -124,20 +166,38 @@ bound to localhost and is the only component holding secrets.
 
 ### Compilation & live preview
 
-`POST /projects/:id/compile` stages the files, runs
-`latexmk -pdf -interaction=nonstopmode -synctex=1 -file-line-error <rootFile>`
-(120 s hard timeout, process-group kill), parses the log into structured
-diagnostics, and returns `{ status, pdfUrl, synctexUrl, diagnostics, durationMs }`.
-Compiles are **queued one-per-project** — a newer request supersedes a queued
-one. The PDF and `.synctex.gz` are served from authenticated routes.
+`POST /projects/:id/compile` stages the files, runs `latexmk` with
+`-interaction=nonstopmode -synctex=1 -file-line-error <rootFile>` (120 s hard
+timeout, process-group kill), parses the log into structured diagnostics, and
+returns `{ status, pdfUrl, synctexUrl, diagnostics, durationMs }`. Compiles are
+**queued one-per-project** — a newer request supersedes a queued one. The PDF and
+`.synctex.gz` are served from authenticated routes.
+
+**Compile settings (per project, in Project settings → Compilation):**
+
+- **TeX engine** — pdfLaTeX (default), XeLaTeX, or LuaLaTeX, mapped to
+  `latexmk -pdf / -pdfxe / -pdflua`. The choice persists per project and the
+  active engine shows as a chip on the status pill.
+- **Stop on first error** — adds `-halt-on-error` so a failing build stops at the
+  first error instead of recovering.
+- **Draft / fast** — queues `graphicx`'s `draft` option (via `latexmk -usepretex`)
+  so images are boxed, not rendered — a faster preview.
 
 In the UI: **Compile** button or **⌘↵**, a **compile-on-save** toggle, a
-diagnostics panel under the editor (click a row to jump to `file:line`), and a
-pdf.js viewer with page nav / zoom / fit-width / **download** (named after the
-root file, e.g. `main.pdf`; the Review toggle downloads `….review.pdf`) that
-preserves scroll across recompiles. The compile workspace is a host directory bind-mounted into texlive
-(see [docs/decisions.md](docs/decisions.md), ADR-003), so the host-run api and
-texlive share files directly.
+status pill that reflects status **and the active engine/mode**, a diagnostics
+panel under the editor (click a row to jump to `file:line`; deterministic
+quick-fixes such as "Add amsmath"), and a pdf.js viewer with page nav / zoom /
+fit-width / dark+invert / **download** (named after the root file, e.g.
+`main.pdf`; the Review toggle downloads `….review.pdf`) that preserves scroll
+across recompiles. The compile workspace is a host directory bind-mounted into
+texlive (see [docs/decisions.md](docs/decisions.md), ADR-003), so the host-run
+api and texlive share files directly.
+
+Two related document tools live in the toolbar's tools (⋮) menu:
+**Word count** (`GET /projects/:id/wordcount`, a LaTeX-aware `texcount -inc` that
+follows `\input`/`\include` and reports a total + per-file breakdown) and
+**Export (.zip)** (`GET /projects/:id/export`, the source tree as a zip, with
+optional "include compiled PDF" and "include literature PDFs").
 
 ### Autocomplete (deterministic, offline)
 
@@ -226,7 +286,7 @@ pnpm install
 docker compose up -d
 
 # 4. Create the database schema and seed a demo project
-pnpm db:migrate          # prisma migrate dev — creates the schema
+pnpm db:push             # prisma db push — syncs the schema (see "Schema note" below)
 pnpm db:seed             # one "Demo Project" with a compilable main.tex
 
 # 5. Run the apps with hot reload (web :3000, api :4000)
@@ -271,7 +331,7 @@ once against the published Postgres to create the schema.
 | `pnpm lint`            | Lint every workspace.                                    |
 | `pnpm typecheck`       | Strict `tsc --noEmit` across the repo.                   |
 | `pnpm format`          | Prettier write.                                          |
-| `pnpm db:migrate`      | `prisma migrate dev` — create/apply the schema.          |
+| `pnpm db:push`         | `prisma db push` — sync the schema to the database.      |
 | `pnpm db:seed`         | Seed the demo project.                                   |
 | `pnpm db:studio`       | Open Prisma Studio.                                      |
 | `docker compose up -d` | Start postgres + mathcheck + texlive.                    |
@@ -383,16 +443,25 @@ env var (inference-scoped). See `docs/decisions.md` ADR-004.
 ```
 latex-studio/
 ├─ apps/
-│  ├─ web/                 # Next.js editor
+│  ├─ web/                 # Next.js editor + Home/references/library/plugins/diagram pages
 │  └─ api/                 # Fastify API + Prisma
 │     └─ prisma/
-│        ├─ schema.prisma  # Project, TexFile, CompileLog, Snapshot, ChatThread, ChatMessage, AiCallLog
+│        ├─ schema.prisma  # Project, TexFile, CompileLog, Snapshot, ProjectFolder, Folder,
+│        │                 #   LiteratureItem, LibraryChunk, TrashEntry, ChatThread, ChatMessage,
+│        │                 #   AiCallLog, UsageStat, Credential
+│        ├─ migrations/manual/  # hand-authored, re-runnable SQL (the repo syncs via `db push`)
 │        └─ seed.ts        # demo project
 ├─ services/
-│  └─ mathcheck/           # FastAPI + SymPy
+│  ├─ mathcheck/           # FastAPI + SymPy + PyMuPDF (verify, extract, annotate)
+│  └─ pyrun/               # sandboxed Python "Run" + GNUplot images
 ├─ packages/
 │  └─ shared/              # shared TypeScript types
 ├─ docker-compose.yml
 ├─ turbo.json
 └─ .env.example
 ```
+
+> **Schema note:** the repo syncs the database with `prisma db push` (the
+> `prisma/migrations/manual/*.sql` files are the hand-authored, re-runnable record
+> of each change for production / audit). `pnpm db:push` applies the current
+> schema; `pnpm db:seed` seeds the demo project.

@@ -2,10 +2,11 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, Copy, FilePlus, FileText, Loader2, Square, Trash2, X } from 'lucide-react';
-import type { RunArtifact } from '@latex-studio/shared';
+import type { DiagnosticSeverity, RunArtifact } from '@latex-studio/shared';
 import { api } from '@/lib/api';
 import { useEditorStore } from '@/lib/store';
 import { useRunStore } from '@/lib/runStore';
+import { usePythonCheckStore } from '@/lib/pythonCheckStore';
 
 /**
  * Python "Run" output window: a live console (stdout/stderr distinct), a status
@@ -30,6 +31,13 @@ function thumbUrlFor(f: RunArtifact): string | null {
   if (isImgName(f.name)) return api.runArtifactUrl(f.url);
   return null;
 }
+
+const SEV_DOT: Record<DiagnosticSeverity, string> = {
+  error: 'bg-rose-500',
+  'warning-important': 'bg-amber-500',
+  'warning-minor': 'bg-yellow-400',
+  info: 'bg-sky-400',
+};
 
 interface Row {
   stream: 'stdout' | 'stderr';
@@ -58,6 +66,15 @@ function statusLine(status: string, exitCode: number | null, durationMs: number 
 export function PythonOutputPanel() {
   const { running, status, runId, segments, exitCode, durationMs, figures, clear, stop, importFigure } = useRunStore();
   const revealLocation = useEditorStore((s) => s.revealLocation);
+  const activeFileId = useEditorStore((s) => s.activeFileId);
+  const files = useEditorStore((s) => s.files);
+  const pyByFile = usePythonCheckStore((s) => s.byFile);
+  const pyChecking = usePythonCheckStore((s) => s.checking);
+  const pyError = usePythonCheckStore((s) => s.error);
+  const lastCheckedPath = usePythonCheckStore((s) => s.lastCheckedPath);
+  const activePath = files.find((f) => f.id === activeFileId)?.path;
+  const pyDiags = activePath ? pyByFile[activePath] ?? [] : [];
+  const showCheck = pyChecking || pyDiags.length > 0 || (!!pyError) || (!!activePath && lastCheckedPath === activePath);
   const [lightbox, setLightbox] = useState<RunArtifact | null>(null);
   const [added, setAdded] = useState<Set<string>>(new Set());
   const [adding, setAdding] = useState<string | null>(null);
@@ -140,6 +157,37 @@ export function PythonOutputPanel() {
           </button>
         </div>
       </div>
+
+      {/* Error-check diagnostics (AI + deterministic syntax) for the active .py file */}
+      {showCheck && (
+        <div data-testid="python-problems" className="max-h-44 flex-none overflow-auto border-b border-[var(--ls-line)] px-3 py-2">
+          <div className="mb-1 flex items-center gap-2 text-[10.5px] font-semibold uppercase tracking-[0.14em] text-[var(--ls-muted)]">
+            <span>Problems{pyDiags.length > 0 ? ` (${pyDiags.length})` : ''}</span>
+            {pyChecking && <Loader2 className="h-3 w-3 animate-spin text-[var(--ls-brand)]" />}
+          </div>
+          {pyError ? (
+            <div className="text-[12px] text-rose-500">{pyError}</div>
+          ) : !pyChecking && pyDiags.length === 0 ? (
+            <div className="text-[12px] text-emerald-500">No problems found.</div>
+          ) : (
+            <div className="flex flex-col gap-0.5">
+              {pyDiags.map((d, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  data-testid="python-problem"
+                  onClick={() => d.line && activePath && void revealLocation(activePath, d.line, d.column)}
+                  className="flex items-start gap-2 rounded-md px-1.5 py-1 text-left text-[12px] transition-colors hover:bg-[var(--ls-surface-muted)]"
+                >
+                  <span className={`mt-[5px] h-2 w-2 flex-none rounded-full ${SEV_DOT[d.severity]}`} aria-hidden />
+                  <span className="flex-none tabular-nums text-[var(--ls-muted)]">L{d.line ?? '?'}</span>
+                  <span className="text-[var(--ls-text)]">{d.message}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Console */}
       <div ref={scrollRef} data-testid="python-console" className="min-h-0 flex-1 overflow-auto px-3 py-2 font-mono text-[12px] leading-[1.5]" style={{ fontFamily: 'var(--ls-mono)' }}>

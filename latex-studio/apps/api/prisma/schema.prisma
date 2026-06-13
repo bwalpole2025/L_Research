@@ -63,6 +63,14 @@ model Project {
   pythonRunTarget String  @default("")
   networkEnabled  Boolean @default(false)
 
+  // Compile settings. texEngine selects the latexmk engine flag
+  // (pdflatex → -pdf, xelatex → -pdfxe, lualatex → -pdflua). haltOnError stops
+  // at the first error (latexmk -halt-on-error); draftMode skips image
+  // rendering for a faster preview (graphicx draft via latexmk -usepretex).
+  texEngine   String  @default("pdflatex")
+  haltOnError Boolean @default(false)
+  draftMode   Boolean @default(false)
+
   // Lifecycle. A project is ACTIVE when both are null. `archivedAt` set ⇒ set
   // aside (hidden from the main list + editor, fully restorable). `deletedAt`
   // set ⇒ in the Trash (soft-deleted; restorable until purged). The default

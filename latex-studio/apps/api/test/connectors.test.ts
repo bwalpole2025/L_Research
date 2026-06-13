@@ -34,6 +34,7 @@ describe('connector routes', () => {
   afterEach(async () => {
     vi.unstubAllGlobals();
     await app.prisma.credential.deleteMany({ where: { connectorId: 'google-drive' } });
+    await app.prisma.project.deleteMany({ where: { name: { startsWith: 'ztmp-drive' } } });
   });
   afterAll(async () => {
     await app.prisma.credential.deleteMany({ where: { connectorId: 'google-drive' } });
@@ -147,5 +148,75 @@ describe('connector routes', () => {
     expect(new URL((connect.json() as { authUrl: string }).authUrl).searchParams.get('client_id')).toBe('DBX_ID');
 
     await app.prisma.credential.deleteMany({ where: { connectorId: 'dropbox::app' } });
+  });
+
+  // ── Storage import / upload (the Google Drive data flows) ─────────────────────
+  // A bare accessToken (no expiresAt) is used fresh without a refresh round-trip.
+  const connectDrive = () => app.vault.store('google-drive', { authType: 'oauth2', secret: { accessToken: 'DRIVE-TOKEN' }, scopes: ['drive.file'] });
+
+  it('imports a Drive file into the project (read server-side, stored as a project file)', async () => {
+    await connectDrive();
+    const project = await app.prisma.project.create({ data: { name: 'ztmp-drive-import' } });
+    // Drive read = a GET with ?alt=media; return .tex bytes.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL) => {
+        if (String(input).includes('alt=media')) return new Response(new TextEncoder().encode('\\section{Imported}'), { status: 200 });
+        return new Response('{}', { status: 200 });
+      }),
+    );
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/projects/${project.id}/storage/google-drive/import`,
+      headers: auth,
+      payload: { fileId: 'gdrive-file-1', path: 'imported.tex' },
+    });
+    expect(res.statusCode).toBe(201);
+    expect((res.json() as { path: string }).path).toBe('imported.tex');
+    const row = await app.prisma.texFile.findUnique({ where: { projectId_path: { projectId: project.id, path: 'imported.tex' } } });
+    expect(row?.encoding).toBe('utf8');
+    expect(row?.content).toBe('\\section{Imported}');
+  });
+
+  it('uploads a project file to Drive (bytes read server-side, sent to the upload endpoint)', async () => {
+    await connectDrive();
+    const project = await app.prisma.project.create({ data: { name: 'ztmp-drive-upload' } });
+    const file = await app.prisma.texFile.create({ data: { projectId: project.id, path: 'main.tex', content: 'hello drive', encoding: 'utf8' } });
+    const calls: Array<{ url: string; body: unknown }> = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL, init?: RequestInit) => {
+        calls.push({ url: String(input), body: init?.body });
+        if (String(input).includes('/upload/drive/v3/files')) {
+          return new Response(JSON.stringify({ id: 'newId', name: 'main.tex', mimeType: 'text/x-tex', size: '11', modifiedTime: 't' }), { status: 200 });
+        }
+        return new Response('{}', { status: 200 });
+      }),
+    );
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/projects/${project.id}/storage/google-drive/upload`,
+      headers: auth,
+      payload: { fileId: file.id },
+    });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { entry: { name: string } }).entry.name).toBe('main.tex');
+    const upload = calls.find((c) => c.url.includes('/upload/drive/v3/files'));
+    expect(upload).toBeTruthy();
+    expect(Buffer.from(upload!.body as Buffer).toString()).toContain('hello drive');
+  });
+
+  it('import without a connected Drive returns 409 needs_connect (no crash)', async () => {
+    const project = await app.prisma.project.create({ data: { name: 'ztmp-drive-noauth' } });
+    const res = await app.inject({
+      method: 'POST',
+      url: `/projects/${project.id}/storage/google-drive/import`,
+      headers: auth,
+      payload: { fileId: 'x', path: 'a.tex' },
+    });
+    expect(res.statusCode).toBe(409);
+    expect((res.json() as { kind: string }).kind).toBe('needs_connect');
   });
 });

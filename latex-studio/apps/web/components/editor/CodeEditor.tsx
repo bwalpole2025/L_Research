@@ -27,8 +27,10 @@ import { editorController } from '@/lib/editorController';
 import { CompletionController } from '@/lib/completion/controller';
 import { useDocumentModelStore } from '@/lib/documentModelStore';
 import { latexLanguageSupport, beginEndCloser } from './latex';
+import { latexFolding } from './latexFold';
 import { pythonLanguageSupport } from './python';
 import { latexAutocomplete } from './latexAutocomplete';
+import { pythonAutocomplete } from './pythonAutocomplete';
 import { mathPreview } from './mathPreview';
 import { editorTheme } from './theme';
 import { flashField, setFlash } from './flash';
@@ -119,14 +121,19 @@ export function CodeEditor(props: CodeEditorProps) {
       highlightSelectionMatches(),
       search({ top: true }),
       isPython ? pythonLanguageSupport() : latexLanguageSupport(),
+      // AI ghost-text, the autocomplete dropdown AND the multi-line "predict
+      // next" block work for both languages; each language gets its own
+      // dropdown source (Python: numpy/scipy/plt/math + locals; LaTeX also gets
+      // math preview and the \begin-closer).
+      inlineSuggestion(completion.current!.config),
+      predictBlockExtension(completion.current!.predictConfig),
       ...(isPython
-        ? []
+        ? [pythonAutocomplete()]
         : [
             latexAutocomplete(),
             mathPreview(),
             beginEndCloser,
-            inlineSuggestion(completion.current!.config),
-            predictBlockExtension(completion.current!.predictConfig),
+            latexFolding(),
           ]),
       flashField,
       mathGutter(),

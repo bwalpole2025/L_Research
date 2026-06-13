@@ -78,6 +78,7 @@ export function DiagnosticsPanel() {
   });
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [showRawLog, setShowRawLog] = useState(false);
+  const [collapsedFiles, setCollapsedFiles] = useState<Set<string>>(new Set());
 
   const rootFile = projects.find((p) => p.id === projectId)?.rootFile ?? 'main.tex';
   const counts = useMemo(() => {
@@ -85,6 +86,29 @@ export function DiagnosticsPanel() {
     for (const d of diagnostics) c[d.severity] = (c[d.severity] ?? 0) + 1;
     return c;
   }, [diagnostics]);
+
+  // Visible (filtered) diagnostics keep their original index so the per-row
+  // expander state stays stable; group them by file for an Overleaf-style list.
+  const visible = useMemo(() => diagnostics.map((d, i) => ({ d, i })).filter((e) => shown[e.d.severity]), [diagnostics, shown]);
+  const grouped = useMemo(() => {
+    const m = new Map<string, { d: Diagnostic; i: number }[]>();
+    for (const e of visible) {
+      const key = e.d.file ?? rootFile;
+      const arr = m.get(key);
+      if (arr) arr.push(e);
+      else m.set(key, [e]);
+    }
+    return [...m.entries()];
+  }, [visible, rootFile]);
+  // Long lists: let the browser skip rendering off-screen rows (native windowing).
+  const heavy = visible.length > 50;
+  const toggleFile = (file: string) =>
+    setCollapsedFiles((prev) => {
+      const next = new Set(prev);
+      if (next.has(file)) next.delete(file);
+      else next.add(file);
+      return next;
+    });
 
   const jump = (d: Diagnostic) => {
     if (d.line === undefined) return;
@@ -111,6 +135,83 @@ export function DiagnosticsPanel() {
       else next.add(i);
       return next;
     });
+
+  const renderEntry = ({ d, i }: { d: Diagnostic; i: number }) => {
+    const tier = TIER[d.severity]!;
+    const Icon = tier.icon;
+    const clickable = d.line !== undefined;
+    const fixable = (d.severity === 'error' || d.severity === 'warning-important') && !d.rerunHint && aiAvailable && errorFixesEnabled;
+    const isOpen = expanded.has(i);
+    return (
+      <div
+        key={i}
+        data-testid={`diag-${d.severity}`}
+        // Long lists: let the browser skip painting off-screen rows.
+        style={heavy ? { contentVisibility: 'auto', containIntrinsicSize: '0 44px' } : undefined}
+        className={`group mx-2 mb-1 overflow-hidden rounded-md border border-l-2 border-zinc-200 bg-white shadow-[0_1px_0_rgba(18,25,38,0.03)] dark:border-zinc-800 dark:bg-zinc-900/40 ${tier.border}`}
+      >
+        <div className="flex items-stretch">
+          {d.rawExcerpt && (
+            <button type="button" onClick={() => toggleExpand(i)} aria-label="Show raw log excerpt" className="flex items-center pl-2 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300">
+              {isOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => jump(d)}
+            disabled={!clickable}
+            className={`flex min-w-0 flex-1 items-start gap-2 px-2.5 py-1.5 text-left ${clickable ? 'hover:bg-zinc-50 dark:hover:bg-zinc-800/70' : 'cursor-default'}`}
+          >
+            <Icon className={`mt-0.5 h-4 w-4 shrink-0 ${tier.iconColor}`} />
+            <span className="min-w-0 flex-1">
+              <span className="break-words text-zinc-700 dark:text-zinc-200">{d.message}</span>
+              {d.line !== undefined && <span className="ml-2 whitespace-nowrap text-xs text-zinc-400">L{d.line}</span>}
+            </span>
+          </button>
+          {d.rerunHint && (
+            <button
+              type="button"
+              data-testid="diag-rerun"
+              onClick={() => void compileProject()}
+              title="A rerun (not an edit) resolves this"
+              className="my-1 mr-2 inline-flex shrink-0 items-center gap-1 self-center rounded border border-emerald-300 px-1.5 py-0.5 text-[11px] font-medium text-emerald-700 hover:bg-emerald-50 dark:border-emerald-500/40 dark:text-emerald-300 dark:hover:bg-emerald-500/10"
+            >
+              <Play className="h-3 w-3" /> Recompile
+            </button>
+          )}
+          {d.quickFix && (
+            <button
+              type="button"
+              onClick={() => void applyDiagnosticQuickFix(d.quickFix!)}
+              disabled={compiling}
+              title={`${d.quickFix.label} and recompile`}
+              data-testid="diag-quick-fix"
+              className="my-1 mr-2 inline-flex shrink-0 items-center gap-1 self-center rounded border border-emerald-300 px-1.5 py-0.5 text-[11px] font-medium text-emerald-700 hover:bg-emerald-50 disabled:opacity-50 dark:border-emerald-500/40 dark:text-emerald-300 dark:hover:bg-emerald-500/10"
+            >
+              <Wand2 className="h-3 w-3" /> {d.quickFix.label}
+            </button>
+          )}
+          {fixable && (
+            <button
+              type="button"
+              onClick={() => void requestFix(d)}
+              disabled={editBusy}
+              title="Fix with Claude"
+              data-testid="fix-with-claude"
+              className="my-1 mr-2 inline-flex shrink-0 items-center gap-1 self-center rounded border border-blue-300 px-1.5 py-0.5 text-[11px] font-medium text-blue-700 opacity-0 transition-opacity hover:bg-blue-50 focus:opacity-100 group-hover:opacity-100 disabled:opacity-50 dark:border-blue-500/40 dark:text-blue-300 dark:hover:bg-blue-500/10"
+            >
+              <Sparkles className="h-3 w-3" /> Fix
+            </button>
+          )}
+        </div>
+        {isOpen && d.rawExcerpt && (
+          <pre data-testid="diag-excerpt" className="overflow-x-auto border-t border-zinc-100 bg-zinc-50 px-3 py-1.5 font-mono text-[11px] leading-relaxed text-zinc-500 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-400">
+            {d.rawExcerpt}
+          </pre>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div className="flex h-full flex-col bg-[var(--ls-surface)]">
@@ -220,85 +321,32 @@ export function DiagnosticsPanel() {
           <p className="px-3 py-3 text-sm text-red-600 dark:text-red-400">{compileError}</p>
         ) : diagnostics.length === 0 ? (
           <p className="px-3 py-3 text-xs text-zinc-400">{compileStatus ? 'No problems.' : 'Compile to see diagnostics.'}</p>
+        ) : visible.length === 0 ? (
+          <p className="px-3 py-3 text-xs text-zinc-400">No problems match the selected filters.</p>
         ) : (
-          <ul className="py-1.5">
-            {diagnostics.map((d, i) => {
-              if (!shown[d.severity]) return null;
-              const tier = TIER[d.severity]!;
-              const Icon = tier.icon;
-              const clickable = d.line !== undefined;
-              const fixable = (d.severity === 'error' || d.severity === 'warning-important') && !d.rerunHint && aiAvailable && errorFixesEnabled;
-              const isOpen = expanded.has(i);
+          <div className="py-1.5" data-testid="diag-list">
+            {grouped.map(([file, entries]) => {
+              const fileCollapsed = collapsedFiles.has(file);
               return (
-                <li key={i} data-testid={`diag-${d.severity}`} className={`group mx-2 mb-1 overflow-hidden rounded-md border border-l-2 border-zinc-200 bg-white shadow-[0_1px_0_rgba(18,25,38,0.03)] dark:border-zinc-800 dark:bg-zinc-900/40 ${tier.border}`}>
-                  <div className="flex items-stretch">
-                    {d.rawExcerpt && (
-                      <button type="button" onClick={() => toggleExpand(i)} aria-label="Show raw log excerpt" className="flex items-center pl-2 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300">
-                        {isOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => jump(d)}
-                      disabled={!clickable}
-                      className={`flex min-w-0 flex-1 items-start gap-2 px-2.5 py-1.5 text-left ${clickable ? 'hover:bg-zinc-50 dark:hover:bg-zinc-800/70' : 'cursor-default'}`}
-                    >
-                      <Icon className={`mt-0.5 h-4 w-4 shrink-0 ${tier.iconColor}`} />
-                      <span className="min-w-0 flex-1">
-                        <span className="break-words text-zinc-700 dark:text-zinc-200">{d.message}</span>
-                        {(d.file || d.line !== undefined) && (
-                          <span className="ml-2 whitespace-nowrap text-xs text-zinc-400">
-                            {d.file ?? rootFile}
-                            {d.line !== undefined ? `:${d.line}` : ''}
-                          </span>
-                        )}
-                      </span>
-                    </button>
-                    {d.rerunHint && (
-                      <button
-                        type="button"
-                        data-testid="diag-rerun"
-                        onClick={() => void compileProject()}
-                        title="A rerun (not an edit) resolves this"
-                        className="my-1 mr-2 inline-flex shrink-0 items-center gap-1 self-center rounded border border-emerald-300 px-1.5 py-0.5 text-[11px] font-medium text-emerald-700 hover:bg-emerald-50 dark:border-emerald-500/40 dark:text-emerald-300 dark:hover:bg-emerald-500/10"
-                      >
-                        <Play className="h-3 w-3" /> Recompile
-                      </button>
-                    )}
-                    {d.quickFix && (
-                      <button
-                        type="button"
-                        onClick={() => void applyDiagnosticQuickFix(d.quickFix!)}
-                        disabled={compiling}
-                        title={`${d.quickFix.label} and recompile`}
-                        data-testid="diag-quick-fix"
-                        className="my-1 mr-2 inline-flex shrink-0 items-center gap-1 self-center rounded border border-emerald-300 px-1.5 py-0.5 text-[11px] font-medium text-emerald-700 hover:bg-emerald-50 disabled:opacity-50 dark:border-emerald-500/40 dark:text-emerald-300 dark:hover:bg-emerald-500/10"
-                      >
-                        <Wand2 className="h-3 w-3" /> {d.quickFix.label}
-                      </button>
-                    )}
-                    {fixable && (
-                      <button
-                        type="button"
-                        onClick={() => void requestFix(d)}
-                        disabled={editBusy}
-                        title="Fix with Claude"
-                        data-testid="fix-with-claude"
-                        className="my-1 mr-2 inline-flex shrink-0 items-center gap-1 self-center rounded border border-blue-300 px-1.5 py-0.5 text-[11px] font-medium text-blue-700 opacity-0 transition-opacity hover:bg-blue-50 focus:opacity-100 group-hover:opacity-100 disabled:opacity-50 dark:border-blue-500/40 dark:text-blue-300 dark:hover:bg-blue-500/10"
-                      >
-                        <Sparkles className="h-3 w-3" /> Fix
-                      </button>
-                    )}
-                  </div>
-                  {isOpen && d.rawExcerpt && (
-                    <pre data-testid="diag-excerpt" className="overflow-x-auto border-t border-zinc-100 bg-zinc-50 px-3 py-1.5 font-mono text-[11px] leading-relaxed text-zinc-500 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-400">
-                      {d.rawExcerpt}
-                    </pre>
-                  )}
-                </li>
+                <section key={file} data-testid="diag-file-group" data-file={file}>
+                  <button
+                    type="button"
+                    onClick={() => toggleFile(file)}
+                    aria-expanded={!fileCollapsed}
+                    className="sticky top-0 z-[1] flex w-full items-center gap-1.5 border-b border-zinc-100 bg-[var(--ls-surface)]/95 px-2 py-1 text-left text-[11px] font-medium text-zinc-500 backdrop-blur dark:border-zinc-800 dark:text-zinc-400"
+                  >
+                    {fileCollapsed ? <ChevronRight className="h-3 w-3 shrink-0" /> : <ChevronDown className="h-3 w-3 shrink-0" />}
+                    <FileText className="h-3 w-3 shrink-0" />
+                    <span className="truncate" title={file}>{file}</span>
+                    <span className="ml-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-zinc-200 px-1 text-[10px] font-semibold tabular-nums text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300">
+                      {entries.length}
+                    </span>
+                  </button>
+                  {!fileCollapsed && <div className="pt-1">{entries.map(renderEntry)}</div>}
+                </section>
               );
             })}
-          </ul>
+          </div>
         )}
       </div>
     </div>

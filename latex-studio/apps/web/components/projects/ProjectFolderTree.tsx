@@ -35,7 +35,7 @@ export function ProjectFolderTree(props: TreeProps) {
   const rootDrop = dropTarget === null;
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex flex-col">
       <div className="mb-2 flex items-center justify-between px-2">
         <span className="text-[10.5px] font-semibold uppercase tracking-[0.16em] text-[var(--ls-muted)]">Folders</span>
         <button
@@ -48,7 +48,7 @@ export function ProjectFolderTree(props: TreeProps) {
         </button>
       </div>
 
-      <ul className="min-h-0 flex-1 overflow-y-auto">
+      <ul>
         {/* Root: "All projects" — also a drop target (move to root). */}
         <li>
           <div

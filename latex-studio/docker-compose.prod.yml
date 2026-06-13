@@ -1,0 +1,203 @@
+name: latex-studio-prod
+
+# ── PRIVATE, SELF-HOSTED DEPLOYMENT ──────────────────────────────────────────
+# Single host, reachable ONLY over your VPN (Tailscale/WireGuard). Read the full
+# walk-through in docs/self-hosting.md.
+#
+#   docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
+#
+# THE ONLY PUBLISHED PORT is Caddy's, and it is bound to your tunnel interface
+# (${TUNNEL_BIND_ADDR}) — never 0.0.0.0 on a public NIC. web, api, postgres,
+# mathcheck, pyrun and texlive are NOT published to the host at all; they are
+# reachable only on the internal docker network (and texlive over the docker
+# socket). Verify with an external port scan (docs/self-hosting.md → "Confirm
+# it's not publicly exposed").
+#
+# Secrets come from .env.production (gitignored). Every required var uses the
+# `${VAR:?message}` form, so `up` FAILS FAST if it is unset — no silent insecure
+# defaults. Generate the bearer with `openssl rand -hex 32`.
+
+services:
+  # ── Front door: the only thing published, bound to the tunnel interface ──────
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on: [web]
+    ports:
+      # host_ip:host_port:container_port. Binding to ${TUNNEL_BIND_ADDR} (your
+      # Tailscale 100.x / WireGuard 10.x address) means the listener exists ONLY
+      # on the tunnel interface. NEVER use 0.0.0.0 here.
+      - "${TUNNEL_BIND_ADDR:?set TUNNEL_BIND_ADDR to your tailscale/wireguard IP, e.g. 100.x.y.z}:${TUNNEL_PORT:-8443}:8443"
+    environment:
+      TUNNEL_HOSTNAME: ${TUNNEL_HOSTNAME:?set TUNNEL_HOSTNAME (your tailnet/VPN hostname)}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [internal]
+
+  # ── Next.js app (serves UI + proxies /api with the bearer). Internal only. ───
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      API_INTERNAL_URL: http://api:4000
+      API_BEARER_TOKEN: ${API_BEARER_TOKEN:?set API_BEARER_TOKEN (openssl rand -hex 32)}
+      NODE_ENV: production
+    expose: ["3000"] # internal network only — NOT published to the host
+    networks: [internal]
+
+  # ── Fastify api. Internal only; reachable solely through web's /api proxy. ───
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    # Non-root (the node:20 image's uid 1000); group_add gives access to the
+    # docker socket so the api can `docker exec` texlive and `docker run` pyrun.
+    # DOCKER_GID = the host's docker group id: `getent group docker | cut -d: -f3`.
+    user: "node"
+    group_add:
+      - "${DOCKER_GID:?set DOCKER_GID = getent group docker | cut -d: -f3}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      workspace-init:
+        condition: service_completed_successfully
+    environment:
+      # Binds 0.0.0.0 INSIDE the container's own network namespace only — the
+      # service is not published, so this is not a public listener.
+      API_HOST: 0.0.0.0
+      API_PORT: "4000"
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER:-latex}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-latex_studio}?schema=public
+      API_BEARER_TOKEN: ${API_BEARER_TOKEN:?set API_BEARER_TOKEN (openssl rand -hex 32)}
+      # CORS is pinned to the front-door origin (the api refuses reflect-any
+      # off-loopback). Must match how you reach the app over the tunnel.
+      WEB_BASE_URL: https://${TUNNEL_HOSTNAME:?set TUNNEL_HOSTNAME}
+      # Master key for the credential vault (no OS keychain in a container).
+      CONNECTORS_MASTER_KEY: ${CONNECTORS_MASTER_KEY:?set CONNECTORS_MASTER_KEY (openssl rand -hex 32)}
+      MODEL: ${MODEL:-claude-sonnet-4-6}
+      MATHCHECK_URL: http://mathcheck:8000
+      TEXLIVE_MODE: docker
+      COMPILE_WORKSPACE: /workspace
+      TEXLIVE_CONTAINER: latex-studio-texlive
+      PYRUN_MODE: docker
+      PYRUN_IMAGE: latex-studio-pyrun
+      PYRUN_WORKSPACE_HOST: ${COMPILE_WORKSPACE_HOST:?set COMPILE_WORKSPACE_HOST to the host path backing the workspace volume}
+      # Rate-limit / concurrency ceilings (host protection). Defaults in config.ts.
+      RATE_LIMIT_COMPILE_MAX: ${RATE_LIMIT_COMPILE_MAX:-30}
+      RATE_LIMIT_RUN_MAX: ${RATE_LIMIT_RUN_MAX:-20}
+      RATE_LIMIT_AI_MAX: ${RATE_LIMIT_AI_MAX:-120}
+      COMPILE_MAX_CONCURRENT: ${COMPILE_MAX_CONCURRENT:-2}
+      # NO ANTHROPIC_API_KEY — the boot guard refuses to start with one under
+      # agent-sdk (ADR-004). AI needs the `claude login` credential, which lives
+      # on a HOST keychain, not in this container — see docs/self-hosting.md → AI.
+    expose: ["4000"] # internal network only — NOT published to the host
+    volumes:
+      - ${COMPILE_WORKSPACE_HOST:?set COMPILE_WORKSPACE_HOST to a host dir, e.g. /srv/latex-studio/workspace}:/workspace
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [internal]
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "node -e \"fetch('http://127.0.0.1:4000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Postgres (pgvector). Internal only; data on a named volume. ──────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-latex}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD (openssl rand -hex 24)}
+      POSTGRES_DB: ${POSTGRES_DB:-latex_studio}
+    # NO `ports:` — never published to the host. Reachable only on `internal`.
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks: [internal]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-latex} -d ${POSTGRES_DB:-latex_studio}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── SymPy verification microservice (verification stack — code untouched;
+  #    just not published). Internal only. ──────────────────────────────────────
+  mathcheck:
+    build:
+      context: ./services/mathcheck
+    restart: unless-stopped
+    # NO `ports:` — internal only.
+    networks: [internal]
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz').status==200 else 1)\""
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── TeX Live — J4 SANDBOX HARDENING. A pathological .tex must not be able to
+  #    reach the network or DoS the host. The api `docker exec`s latexmk in here
+  #    (over the docker socket), so it needs NO network of its own. ─────────────
+  texlive:
+    image: texlive/texlive:latest-full
+    container_name: latex-studio-texlive
+    restart: unless-stopped
+    command: ["sleep", "infinity"]
+    working_dir: /workspace
+    network_mode: none # no network at all — cannot phone home or exfiltrate
+    user: "1000:1000" # non-root (matches the workspace volume owner)
+    cpus: "${TEXLIVE_CPUS:-2}"
+    mem_limit: "${TEXLIVE_MEM:-2g}"
+    pids_limit: 512
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: ["ALL"]
+    tmpfs:
+      - /tmp:size=512m
+    volumes:
+      - ${COMPILE_WORKSPACE_HOST}:/workspace
+    depends_on:
+      workspace-init:
+        condition: service_completed_successfully
+
+  # ── pyrun: builds the sandbox image only. Each execution is a throwaway
+  #    `docker run --rm` the api spawns with --network none + cpu/mem/pids caps +
+  #    --user 1000:1000 (apps/api/src/run/runner.ts). ────────────────────────────
+  pyrun:
+    build:
+      context: ./services/pyrun
+    image: latex-studio-pyrun
+    restart: "no"
+    command: ["true"] # nothing long-running; the image is what matters
+    networks: [internal]
+
+  # ── One-shot: make the shared workspace writable by the non-root uid 1000 that
+  #    both the api and the texlive/pyrun sandboxes run as. ─────────────────────
+  workspace-init:
+    image: alpine:3
+    command: ["sh", "-c", "chown -R 1000:1000 /workspace && chmod 0775 /workspace"]
+    volumes:
+      - ${COMPILE_WORKSPACE_HOST}:/workspace
+    restart: "no"
+
+volumes:
+  pgdata: # Postgres data — back up nightly (scripts/backup.sh)
+  caddy_data:
+  caddy_config:
+
+networks:
+  internal:
+    # A normal bridge network: services talk to each other and the api still has
+    # egress (OAuth/literature connectors), but NOTHING is published to the host
+    # except Caddy's tunnel-bound port above.
+    driver: bridge

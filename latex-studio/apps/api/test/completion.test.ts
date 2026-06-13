@@ -22,7 +22,7 @@ const auth = { authorization: `Bearer ${TOKEN}` };
 
 describe('completion prompts', () => {
   it('uses the exact inline-completion-engine system prompt', () => {
-    expect(COMPLETION_SYSTEM_PROMPT).toContain('inline completion engine for LaTeX documents');
+    expect(COMPLETION_SYSTEM_PROMPT).toContain('inline completion engine');
     expect(COMPLETION_SYSTEM_PROMPT).toContain('Output ONLY the text to insert at <CURSOR>');
   });
 

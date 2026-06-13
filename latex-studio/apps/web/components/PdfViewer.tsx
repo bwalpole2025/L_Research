@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { PageViewport, PDFDocumentProxy, RenderTask } from 'pdfjs-dist';
+import type { PageViewport, PDFDocumentLoadingTask, PDFDocumentProxy, RenderTask } from 'pdfjs-dist';
 import {
   ChevronLeft,
   ChevronRight,
@@ -10,6 +10,7 @@ import {
   Highlighter,
   Loader2,
   Maximize,
+  RectangleVertical,
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
@@ -97,6 +98,7 @@ export function PdfViewer() {
     effectiveMode === 'literature' ? literaturePdfUrl : effectiveMode === 'review' ? reviewPdfUrl : pdfUrl;
   const rootFile = useEditorStore((s) => s.projects.find((p) => p.id === s.projectId)?.rootFile ?? null);
   const compiling = useEditorStore((s) => s.compiling);
+  const pdfStale = useEditorStore((s) => s.pdfStale);
   const theme = useEditorStore((s) => s.theme);
   const forwardHighlight = useEditorStore((s) => s.forwardHighlight);
   const locateInPdf = useEditorStore((s) => s.locateInPdf);
@@ -111,12 +113,15 @@ export function PdfViewer() {
   const renderSeq = useRef(0);
   const renderTasks = useRef<RenderTask[]>([]);
   const baseWidth = useRef(612);
+  const baseHeight = useRef(792);
   const scaleRef = useRef(1.2);
 
   const [numPages, setNumPages] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
+  const [pageInput, setPageInput] = useState('1');
   const [scale, setScale] = useState(1.2);
-  const [fitWidth, setFitWidth] = useState(true);
+  const [fitMode, setFitMode] = useState<'width' | 'page' | 'none'>('width');
+  const [pdfLoading, setPdfLoading] = useState(false);
   const [renderNonce, setRenderNonce] = useState(0);
   const [mode, setMode] = useState<PdfMode>(theme === 'dark' ? 'dim' : 'light');
   const [highlight, setHighlight] = useState<Highlight | null>(null);
@@ -181,64 +186,109 @@ export function PdfViewer() {
     }
   }, []);
 
-  // Load the document whenever the PDF URL changes.
+  // Load the document whenever the PDF URL changes. Every state write is guarded
+  // by `cancelled` (re-checked after each await) so a load that loses the race —
+  // file switch, rapid recompile, unmount — never touches an unmounted component
+  // or clobbers a newer document; the in-flight loading task is destroyed too.
   useEffect(() => {
     if (!effectiveUrl) {
       setNumPages(0);
+      setPdfLoading(false);
       return;
     }
     let cancelled = false;
+    let loadingTask: PDFDocumentLoadingTask | null = null;
+    setPdfLoading(true);
     void (async () => {
-      const pdfjs = await loadPdfjs();
-      const task = pdfjs.getDocument({ url: effectiveUrl, disableRange: true, disableStream: true });
       try {
-        const doc = await task.promise;
+        const pdfjs = await loadPdfjs();
+        if (cancelled) return;
+        loadingTask = pdfjs.getDocument({ url: effectiveUrl, disableRange: true, disableStream: true });
+        const doc = await loadingTask.promise;
         if (cancelled) {
           void doc.destroy();
           return;
         }
+        const first = await doc.getPage(1);
+        if (cancelled) {
+          void doc.destroy();
+          return;
+        }
+        const vp = first.getViewport({ scale: 1 });
+        baseWidth.current = vp.width;
+        baseHeight.current = vp.height;
         const previous = docRef.current;
         docRef.current = doc;
-        const first = await doc.getPage(1);
-        baseWidth.current = first.getViewport({ scale: 1 }).width;
         setNumPages(doc.numPages);
         setRenderNonce((n) => n + 1);
         if (previous && previous !== doc) void previous.destroy();
       } catch {
         /* failed to load — keep showing the previous PDF */
+      } finally {
+        if (!cancelled) setPdfLoading(false);
       }
     })();
     return () => {
       cancelled = true;
+      try {
+        void loadingTask?.destroy();
+      } catch {
+        /* noop */
+      }
     };
   }, [effectiveUrl]);
+
+  // Tear down pdf.js on unmount: cancel outstanding renders + destroy the doc.
+  useEffect(() => {
+    return () => {
+      renderTasks.current.forEach((t) => {
+        try {
+          t.cancel();
+        } catch {
+          /* noop */
+        }
+      });
+      renderTasks.current = [];
+      void docRef.current?.destroy();
+      docRef.current = null;
+    };
+  }, []);
 
   // Re-render pages when the page set, scale, or document changes.
   useEffect(() => {
     if (numPages > 0) void renderAll();
   }, [numPages, scale, renderNonce, renderAll]);
 
-  // Fit-width: recompute scale from the container width.
-  const recomputeFit = useCallback(() => {
+  // Fit: recompute scale from the container. 'width' fits the page width;
+  // 'page' additionally bounds by the container height so a whole page is visible.
+  const recomputeFit = useCallback((m: 'width' | 'page') => {
     const container = containerRef.current;
     if (!container || !baseWidth.current) return;
-    const available = container.clientWidth - 24;
-    setScale(Math.max(0.3, Math.min(4, available / baseWidth.current)));
+    let next = (container.clientWidth - 24) / baseWidth.current;
+    if (m === 'page' && baseHeight.current) {
+      next = Math.min(next, (container.clientHeight - 24) / baseHeight.current);
+    }
+    setScale(Math.max(0.3, Math.min(4, next)));
   }, []);
 
   useEffect(() => {
-    if (fitWidth) recomputeFit();
-  }, [fitWidth, numPages, recomputeFit]);
+    if (fitMode !== 'none') recomputeFit(fitMode);
+  }, [fitMode, numPages, recomputeFit]);
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
     const ro = new ResizeObserver(() => {
-      if (fitWidth) recomputeFit();
+      if (fitMode !== 'none') recomputeFit(fitMode);
     });
     ro.observe(container);
     return () => ro.disconnect();
-  }, [fitWidth, recomputeFit]);
+  }, [fitMode, recomputeFit]);
+
+  // Keep the page-jump box in step with the page nearest the viewport top.
+  useEffect(() => {
+    setPageInput(String(currentPage));
+  }, [currentPage]);
 
   // Track the page nearest the top of the viewport.
   const onScroll = useCallback(() => {
@@ -283,8 +333,13 @@ export function PdfViewer() {
   };
 
   const zoom = (delta: number) => {
-    setFitWidth(false);
+    setFitMode('none');
     setScale((s) => Math.max(0.3, Math.min(4, Math.round((s + delta) * 100) / 100)));
+  };
+
+  const jumpToPageInput = () => {
+    const n = Math.min(Math.max(1, Number(pageInput) || 1), numPages || 1);
+    goToPage(n);
   };
 
   const hasPdf = Boolean(effectiveUrl) && numPages > 0;
@@ -293,20 +348,23 @@ export function PdfViewer() {
   // /api proxy as the viewer, so no token ever reaches the markup.
   const downloadPdf = useCallback(async () => {
     if (!effectiveUrl) return;
+    let href: string | null = null;
     try {
       const res = await fetch(effectiveUrl);
       if (!res.ok) return;
       const blob = await res.blob();
-      const href = URL.createObjectURL(blob);
+      href = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = href;
       a.download = pdfDownloadName(rootFile, effectiveMode, literatureTitle);
       document.body.appendChild(a);
       a.click();
       a.remove();
-      window.setTimeout(() => URL.revokeObjectURL(href), 4000);
     } catch {
       /* network hiccup — nothing downloaded */
+    } finally {
+      // Always revoke (even on a mid-download error) so the blob URL never leaks.
+      if (href) window.setTimeout(() => URL.revokeObjectURL(href!), 4000);
     }
   }, [effectiveUrl, rootFile, effectiveMode, literatureTitle]);
 
@@ -368,9 +426,30 @@ export function PdfViewer() {
         >
           <ChevronLeft className="h-4 w-4" />
         </button>
-        <span className="min-w-12 text-center font-medium tabular-nums text-zinc-500 dark:text-zinc-400">
-          {hasPdf ? `${currentPage} / ${numPages}` : '– / –'}
-        </span>
+        {hasPdf ? (
+          <span className="inline-flex items-center gap-1 font-medium tabular-nums text-zinc-500 dark:text-zinc-400">
+            <input
+              aria-label="Go to page"
+              data-testid="pdf-page-input"
+              type="text"
+              inputMode="numeric"
+              value={pageInput}
+              onChange={(e) => setPageInput(e.target.value.replace(/[^0-9]/g, ''))}
+              onFocus={(e) => e.currentTarget.select()}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  jumpToPageInput();
+                  e.currentTarget.blur();
+                }
+              }}
+              onBlur={() => setPageInput(String(currentPage))}
+              className="h-6 w-9 rounded border border-zinc-200 bg-white text-center text-xs tabular-nums text-zinc-700 outline-none focus:border-blue-400 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200"
+            />
+            <span>/ {numPages}</span>
+          </span>
+        ) : (
+          <span className="min-w-12 text-center font-medium tabular-nums text-zinc-500 dark:text-zinc-400">– / –</span>
+        )}
         <button
           type="button"
           aria-label="Next page"
@@ -408,14 +487,37 @@ export function PdfViewer() {
           type="button"
           aria-label="Fit width"
           title="Fit width"
+          data-testid="pdf-fit-width"
           disabled={!hasPdf}
-          onClick={() => setFitWidth(true)}
+          onClick={() => setFitMode('width')}
           className={`${pdfButton} ${
-            fitWidth ? 'bg-blue-50 text-blue-600 dark:bg-blue-500/15 dark:text-blue-300' : ''
+            fitMode === 'width' ? 'bg-blue-50 text-blue-600 dark:bg-blue-500/15 dark:text-blue-300' : ''
           }`}
         >
           <Maximize className="h-4 w-4" />
         </button>
+        <button
+          type="button"
+          aria-label="Fit page"
+          title="Fit whole page"
+          data-testid="pdf-fit-page"
+          disabled={!hasPdf}
+          onClick={() => setFitMode('page')}
+          className={`${pdfButton} ${
+            fitMode === 'page' ? 'bg-blue-50 text-blue-600 dark:bg-blue-500/15 dark:text-blue-300' : ''
+          }`}
+        >
+          <RectangleVertical className="h-4 w-4" />
+        </button>
+        {pdfStale && hasPdf && (
+          <span
+            data-testid="pdf-stale-badge"
+            title="This is the last successful build — the current source failed to compile. Fix the errors and recompile."
+            className="ml-1 inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-300"
+          >
+            <span className="h-1.5 w-1.5 rounded-full bg-amber-500" aria-hidden /> Stale
+          </span>
+        )}
         {effectiveMode === 'clean' && pdfFlags.length > 0 && (
           <button
             type="button"
@@ -474,16 +576,29 @@ export function PdfViewer() {
         data-testid="pdf-scroll"
       >
         {!hasPdf ? (
-          // While compiling, show progress; otherwise the pane stays empty (the
-          // "No preview yet" placeholder was removed — compile from the toolbar).
-          compiling ? (
+          // First load / compile: show progress. Otherwise the pane stays empty
+          // (the "No preview yet" placeholder was removed — compile from the toolbar).
+          compiling || pdfLoading ? (
             <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
               <Loader2 className="h-8 w-8 animate-spin text-zinc-400" />
-              <p className="text-sm font-medium text-zinc-500 dark:text-zinc-400">Compiling…</p>
+              <p className="text-sm font-medium text-zinc-500 dark:text-zinc-400">{compiling ? 'Compiling…' : 'Loading PDF…'}</p>
             </div>
           ) : null
         ) : (
-          <div className="flex flex-col items-center gap-4 p-4" style={{ filter: MODE_FILTER[mode] }}>
+          <>
+            {pdfLoading && (
+              // A fresh PDF is being fetched/parsed while the previous one is still
+              // on screen — make that explicit instead of letting the old PDF linger.
+              <div data-testid="pdf-loading" className="pointer-events-none absolute inset-x-0 top-0 z-10 flex justify-center pt-3">
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-zinc-900/85 px-3 py-1 text-[11px] font-medium text-white shadow-lg">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading…
+                </span>
+              </div>
+            )}
+            <div
+              className={`flex flex-col items-center gap-4 p-4 transition-opacity ${pdfStale ? 'opacity-50' : ''}`}
+              style={{ filter: MODE_FILTER[mode] }}
+            >
             {Array.from({ length: numPages }, (_, i) => i + 1).map((p) => (
               <div
                 key={p}
@@ -538,7 +653,8 @@ export function PdfViewer() {
                     ))}
               </div>
             ))}
-          </div>
+            </div>
+          </>
         )}
       </div>
     </div>

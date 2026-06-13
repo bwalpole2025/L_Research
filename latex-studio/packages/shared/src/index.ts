@@ -51,6 +51,28 @@ export interface Project {
   archivedAt?: string | null;
   /** ISO timestamp when soft-deleted to Trash, or null when not deleted. */
   deletedAt?: string | null;
+  /** Compile engine: latexmk -pdf / -pdfxe / -pdflua. Default "pdflatex". */
+  texEngine?: TexEngine;
+  /** Stop at the first error (latexmk -halt-on-error). Default false. */
+  haltOnError?: boolean;
+  /** Skip image rendering for a faster preview (graphicx draft). Default false. */
+  draftMode?: boolean;
+}
+
+/** TeX engine for compilation. */
+export type TexEngine = 'pdflatex' | 'xelatex' | 'lualatex';
+
+/** A LaTeX-aware word count (texcount): words in text / headers / captions. */
+export interface WordCounts {
+  words: number;
+  headers: number;
+  captions: number;
+}
+
+/** Per-file + document-total word count for a project (texcount -inc). */
+export interface WordCountResult {
+  total: WordCounts;
+  files: Array<{ file: string } & WordCounts>;
 }
 
 /** Which project lifecycle bucket to list: active (default), archived, deleted. */
@@ -635,7 +657,8 @@ export interface PredictNextRequest {
 
 export interface PredictNextResponse {
   prediction: string;
-  kind: 'prose' | 'maths' | 'structural';
+  /** 'code' is the Python-file prediction (line-based, no maths verification). */
+  kind: 'prose' | 'maths' | 'structural' | 'code';
   /** For maths predictions: the step(s) split out for SymPy chain verification. */
   steps?: string[];
 }

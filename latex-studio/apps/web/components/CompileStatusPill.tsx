@@ -51,22 +51,40 @@ export function CompileStatusPill() {
 
   const Icon = compiling ? Loader2 : compileStatus !== 'success' ? CircleAlert : warnings > 0 ? TriangleAlert : CircleCheck;
 
+  // Active compile mode — shown as a small chip so a non-default engine or a
+  // draft/stop-on-error run is never silent.
+  const project = projects.find((p) => p.id === projectId);
+  const engine = project?.texEngine ?? 'pdflatex';
+  const engineLabel = engine === 'xelatex' ? 'XeLaTeX' : engine === 'lualatex' ? 'LuaLaTeX' : null; // pdfLaTeX is the default, no chip
+  const modeBadges = [engineLabel, project?.draftMode ? 'draft' : null, project?.haltOnError ? 'halt' : null].filter(Boolean) as string[];
+
   return (
-    <button
-      type="button"
-      data-testid="compile-status"
-      data-status={compiling ? 'compiling' : (compileStatus ?? '')}
-      onClick={open}
-      title={
-        !compiling && compileStatus !== 'success' && pdfUrl
-          ? 'This run produced no PDF — the viewer shows the LAST SUCCESSFUL build. Click for details.'
-          : 'Open the Problems panel'
-      }
-      className={`flex h-9 items-center gap-1.5 rounded-[9px] border px-3 text-[12.5px] font-medium transition-colors ${tone}`}
-    >
-      <Icon className={`h-3.5 w-3.5 ${compiling ? 'animate-spin' : ''}`} />
-      <span className="hidden lg:inline">{label}</span>
-      <span className="lg:hidden">{compiling ? '…' : errors > 0 ? errors : warnings > 0 ? warnings : '✓'}</span>
-    </button>
+    <span className="flex items-center gap-1.5">
+      <button
+        type="button"
+        data-testid="compile-status"
+        data-status={compiling ? 'compiling' : (compileStatus ?? '')}
+        onClick={open}
+        title={
+          !compiling && compileStatus !== 'success' && pdfUrl
+            ? 'This run produced no PDF — the viewer shows the LAST SUCCESSFUL build. Click for details.'
+            : 'Open the Problems panel'
+        }
+        className={`flex h-9 items-center gap-1.5 rounded-[9px] border px-3 text-[12.5px] font-medium transition-colors ${tone}`}
+      >
+        <Icon className={`h-3.5 w-3.5 ${compiling ? 'animate-spin' : ''}`} />
+        <span className="hidden lg:inline">{label}</span>
+        <span className="lg:hidden">{compiling ? '…' : errors > 0 ? errors : warnings > 0 ? warnings : '✓'}</span>
+      </button>
+      {modeBadges.length > 0 && (
+        <span
+          data-testid="compile-mode"
+          title={`Compile mode: ${[engineLabel ?? 'pdfLaTeX', project?.draftMode ? 'draft (images skipped)' : null, project?.haltOnError ? 'stop on first error' : null].filter(Boolean).join(' · ')}`}
+          className="hidden items-center gap-1 rounded-[7px] border border-[var(--ls-line)] px-1.5 text-[10.5px] font-medium text-[var(--ls-muted)] lg:inline-flex"
+        >
+          {modeBadges.join(' · ')}
+        </span>
+      )}
+    </span>
   );
 }

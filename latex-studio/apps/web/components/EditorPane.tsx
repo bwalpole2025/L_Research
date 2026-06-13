@@ -6,6 +6,7 @@ import { Code2, Eye, Shapes } from 'lucide-react';
 import { useEditorStore } from '@/lib/store';
 import { useAiStore } from '@/lib/aiStore';
 import { useRunStore } from '@/lib/runStore';
+import { usePythonCheckStore } from '@/lib/pythonCheckStore';
 import { usePreviewStore } from '@/lib/previewStore';
 import { isBinaryPath } from '@/lib/fileKind';
 import { dialog } from '@/lib/dialogStore';
@@ -73,17 +74,22 @@ export function EditorPane() {
     [mathByLine, mathFileId, activeFileId],
   );
 
-  // Compile diagnostics for the ACTIVE file (gutter + squiggle markers).
+  // Diagnostics for the ACTIVE file (gutter + squiggle markers). LaTeX files get
+  // compile diagnostics; .py files get the AI/syntax error-check results.
   const diagnostics = useEditorStore((s) => s.diagnostics);
   const projects = useEditorStore((s) => s.projects);
   const projectIdForDiag = useEditorStore((s) => s.projectId);
   const filesForDiag = useEditorStore((s) => s.files);
+  const pyByFile = usePythonCheckStore((s) => s.byFile);
   const lintDiagnostics = useMemo(() => {
-    const rootFile = projects.find((p) => p.id === projectIdForDiag)?.rootFile ?? 'main.tex';
     const activePath = filesForDiag.find((f) => f.id === activeFileId)?.path;
     if (!activePath) return [];
+    if (activePath.toLowerCase().endsWith('.py')) {
+      return (pyByFile[activePath] ?? []).filter((d) => d.line !== undefined);
+    }
+    const rootFile = projects.find((p) => p.id === projectIdForDiag)?.rootFile ?? 'main.tex';
     return diagnostics.filter((d) => d.line !== undefined && (d.file ?? rootFile) === activePath);
-  }, [diagnostics, projects, projectIdForDiag, filesForDiag, activeFileId]);
+  }, [diagnostics, pyByFile, projects, projectIdForDiag, filesForDiag, activeFileId]);
 
   const onRequestSnapshot = useCallback(() => {
     void dialog.prompt({ title: 'Create snapshot', defaultValue: `Snapshot ${new Date().toLocaleString()}`, placeholder: 'label' }).then((label) => {

@@ -35,13 +35,19 @@ import type {
 } from './types';
 
 export const AUTOSAVE_DELAY = 800;
-export const COMPILE_ON_SAVE_DELAY = 600;
+/** Compile-on-save debounce, measured from the LAST KEYSTROKE (not from save
+ *  completion). Sits just past AUTOSAVE_DELAY so the save has normally fired by
+ *  the time we compile; the compile awaits the save regardless, so a slow save
+ *  never changes compile timing unpredictably. */
+export const COMPILE_ON_SAVE_DELAY = 1100;
 /** Upload size cap (base64 inflates ~33%, so keep this comfortably under body limits). */
 export const MAX_UPLOAD_BYTES = 12 * 1024 * 1024;
 
 /** Debounce timers for per-file autosave (kept outside React/store state). */
 const saveTimers = new Map<string, ReturnType<typeof setTimeout>>();
-/** Debounce timer for compile-on-save (one per session). */
+/** In-flight save promises per file, so compile can await the latest save. */
+const inflightSaves = new Map<string, Promise<void>>();
+/** Debounce timer for compile-on-save (one per session), keyed to last edit. */
 let compileTimer: ReturnType<typeof setTimeout> | undefined;
 /** Cache key (normalised steps + settings) of the last math check. */
 let mathCacheKey: string | null = null;
@@ -127,6 +133,8 @@ interface EditorState {
   files: FileMeta[];
   /** Client-only empty folders (folders are otherwise derived from file paths). */
   folders: string[];
+  /** True while the active project's file list is loading (first-paint skeleton). */
+  filesLoading: boolean;
 
   // Open documents
   openFileIds: string[];
@@ -147,6 +155,9 @@ interface EditorState {
   compileLog: string | null;
   compileError: string | null;
   pdfUrl: string | null;
+  /** True when the shown PDF is the last GOOD build but the source has since
+   *  failed to compile — the viewer dims it and shows a "stale" badge. */
+  pdfStale: boolean;
   compileOnSave: boolean;
 
   // SyncTeX / cross-pane navigation
@@ -224,6 +235,9 @@ interface EditorState {
     rootFile?: string;
     pythonRunTarget?: string;
     networkEnabled?: boolean;
+    texEngine?: 'pdflatex' | 'xelatex' | 'lualatex';
+    haltOnError?: boolean;
+    draftMode?: boolean;
   }) => Promise<void>;
   checkDerivation: () => Promise<void>;
   clearMath: () => void;
@@ -256,21 +270,26 @@ export const useEditorStore = create<EditorState>((set, get) => {
     }
   }
 
-  /** Run the debounced save for one file. */
+  /** Persist one file. Compile is NOT triggered here — see scheduleCompile,
+   *  which keys off the last keystroke and awaits the in-flight save instead. */
   async function doSave(id: string): Promise<void> {
     const content = get().contents[id];
     if (content === undefined) return;
     set((s) => ({ status: { ...s.status, [id]: 'saving' } }));
-    try {
-      await api.updateFile(id, { content });
-      // Only mark saved if nothing newer was typed since we captured `content`.
-      if (get().contents[id] === content) {
-        set((s) => ({ status: { ...s.status, [id]: 'saved' } }));
+    const p = (async () => {
+      try {
+        await api.updateFile(id, { content });
+        // Only mark saved if nothing newer was typed since we captured `content`.
+        if (get().contents[id] === content) {
+          set((s) => ({ status: { ...s.status, [id]: 'saved' } }));
+        }
+      } catch {
+        set((s) => ({ status: { ...s.status, [id]: 'error' } }));
       }
-      if (get().compileOnSave) scheduleCompile();
-    } catch {
-      set((s) => ({ status: { ...s.status, [id]: 'error' } }));
-    }
+    })();
+    inflightSaves.set(id, p);
+    await p;
+    if (inflightSaves.get(id) === p) inflightSaves.delete(id);
   }
 
   function scheduleSave(id: string): void {
@@ -285,12 +304,35 @@ export const useEditorStore = create<EditorState>((set, get) => {
     );
   }
 
-  /** Debounced compile, fired after a successful save when compile-on-save is on. */
+  /** Force one file's pending/in-flight save to completion (used before compile). */
+  async function flushSave(id: string): Promise<void> {
+    const timer = saveTimers.get(id);
+    if (timer) {
+      clearTimeout(timer);
+      saveTimers.delete(id);
+      await doSave(id);
+    } else {
+      await inflightSaves.get(id);
+    }
+  }
+
+  /** Flush every pending/in-flight save (a compile rebuilds the whole project). */
+  async function flushAllSaves(): Promise<void> {
+    const ids = new Set<string>([...saveTimers.keys(), ...inflightSaves.keys()]);
+    await Promise.all([...ids].map((id) => flushSave(id)));
+  }
+
+  /** Compile-on-save, debounced off the LAST KEYSTROKE. When it fires it first
+   *  flushes outstanding saves to completion, so the server always compiles the
+   *  latest content and a slow save can't shift the compile schedule. */
   function scheduleCompile(): void {
     if (compileTimer) clearTimeout(compileTimer);
     compileTimer = setTimeout(() => {
       compileTimer = undefined;
-      void get().compileProject();
+      void (async () => {
+        await flushAllSaves();
+        await get().compileProject();
+      })();
     }, COMPILE_ON_SAVE_DELAY);
   }
 
@@ -299,6 +341,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
     projectId: null,
     files: [],
     folders: [],
+    filesLoading: false,
     openFileIds: [],
     activeFileId: null,
     contents: {},
@@ -312,6 +355,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
     compileLog: null,
     compileError: null,
     pdfUrl: null,
+    pdfStale: false,
     compileOnSave: false,
     pendingReveal: null,
     forwardHighlight: null,
@@ -424,8 +468,13 @@ export const useEditorStore = create<EditorState>((set, get) => {
     async refreshFiles() {
       const { projectId } = get();
       if (!projectId) return;
-      const files = await api.listFiles(projectId);
-      set({ files });
+      set({ filesLoading: true });
+      try {
+        const files = await api.listFiles(projectId);
+        set({ files });
+      } finally {
+        set({ filesLoading: false });
+      }
     },
 
     async openFile(id) {
@@ -460,7 +509,9 @@ export const useEditorStore = create<EditorState>((set, get) => {
         contents: { ...s.contents, [id]: content },
         status: { ...s.status, [id]: 'dirty' },
       }));
+      // Both timers key off this keystroke; the compile awaits the save when it fires.
       scheduleSave(id);
+      if (get().compileOnSave) scheduleCompile();
     },
 
     setCursor(id, cursor) {
@@ -529,6 +580,7 @@ export const useEditorStore = create<EditorState>((set, get) => {
         clearTimeout(timer);
         saveTimers.delete(id);
       }
+      inflightSaves.delete(id);
       set((s) => {
         const contents = { ...s.contents };
         const status = { ...s.status };
@@ -645,6 +697,11 @@ export const useEditorStore = create<EditorState>((set, get) => {
           compileDurationMs: res.durationMs,
           compileLog: res.log ?? null,
           pdfUrl: res.pdfUrl ? `/api${res.pdfUrl}` : get().pdfUrl,
+          // A failed compile ⇒ whatever PDF we show (the new one may be a partial
+          // or the last-good build still on disk) no longer reflects the source,
+          // so mark it stale; a successful compile is in sync. The viewer dims
+          // the PDF and shows a "stale" badge while this is true.
+          pdfStale: res.status === 'error',
           // The layout just changed — stale highlight positions would lie.
           // Checker flags return on the next audit run.
           pdfFlags: [],
@@ -662,6 +719,8 @@ export const useEditorStore = create<EditorState>((set, get) => {
         set({
           compiling: false,
           compileError: err instanceof ApiError ? err.message : 'Compilation failed',
+          // A previously shown PDF (if any) no longer reflects the source.
+          pdfStale: get().pdfUrl !== null,
         });
       }
     },
@@ -779,6 +838,9 @@ export const useEditorStore = create<EditorState>((set, get) => {
                 rootFile: updated.rootFile,
                 pythonRunTarget: updated.pythonRunTarget ?? '',
                 networkEnabled: updated.networkEnabled ?? false,
+                texEngine: updated.texEngine ?? 'pdflatex',
+                haltOnError: updated.haltOnError ?? false,
+                draftMode: updated.draftMode ?? false,
               }
             : p,
         ),

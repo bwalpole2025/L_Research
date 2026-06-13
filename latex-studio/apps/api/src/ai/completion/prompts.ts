@@ -1,13 +1,17 @@
 import type { CompletionInlineRequest, CompletionMode } from '@latex-studio/shared';
 
-/** The exact inline-completion system prompt (fixed; set at warm `startup`). */
+/**
+ * The inline-completion system prompt (fixed; set at warm `startup`). Kept
+ * LANGUAGE-NEUTRAL so the one warm pool serves both LaTeX and Python — the
+ * per-request mode reminder specialises each call (LaTeX notation vs Python code).
+ */
 export const COMPLETION_SYSTEM_PROMPT =
-  'You are an inline completion engine for LaTeX documents. ' +
+  'You are an inline completion engine for source files (LaTeX documents and Python code). ' +
   'Output ONLY the text to insert at <CURSOR>. No commentary, no fences, no repetition of existing text. ' +
-  "Match the author's notation, macros, and register exactly. " +
+  "Match the surrounding file's language, notation, style, and indentation exactly. " +
   "When a context card is provided, use the document's own macros, symbols, and notation from it — reuse macros " +
   '(e.g. \\Bo) rather than re-expanding them, and reuse established terms and symbol names. ' +
-  'Predict what THIS document is likely to say next, not generic text.';
+  'Predict what THIS file is likely to say next, not generic text.';
 
 /** Soft output caps per mode (the SDK exposes no response max_tokens). */
 export const TOKEN_CAPS: Record<CompletionMode, number> = {
@@ -15,6 +19,7 @@ export const TOKEN_CAPS: Record<CompletionMode, number> = {
   'inline-math': 60,
   'display-align': 60,
   preamble: 20,
+  'python-code': 64,
 };
 
 const MODE_REMINDER: Record<CompletionMode, string> = {
@@ -25,6 +30,10 @@ const MODE_REMINDER: Record<CompletionMode, string> = {
     'Complete the current line/step; do not start a new environment.',
   preamble:
     'Context: the document preamble (before \\begin{document}). Complete the package/command/setup line.',
+  'python-code':
+    'Context: Python code. Complete the current line or block in valid Python, matching the existing ' +
+    'indentation, naming, and style. Output only Python to insert — no prose, no markdown, no LaTeX. ' +
+    'Do not re-indent or repeat lines that already exist before the cursor.',
 };
 
 /** Build the per-completion user prompt (mode reminder + soft cap + document card + context). */

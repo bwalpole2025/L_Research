@@ -99,7 +99,7 @@ const createThreadBody = z.object({ title: z.string().trim().min(1).max(200).opt
 const completeBody = z.object({
   prefix: z.string().max(40_000),
   suffix: z.string().max(20_000).optional(),
-  mode: z.enum(['prose', 'inline-math', 'display-align', 'preamble']),
+  mode: z.enum(['prose', 'inline-math', 'display-align', 'preamble', 'python-code']),
   model: z.string().trim().min(1).max(100).optional(),
   provider: z.enum(['agent-sdk', 'api']).optional(),
   baseline: z.boolean().optional(),

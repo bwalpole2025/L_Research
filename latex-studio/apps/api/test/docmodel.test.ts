@@ -117,4 +117,20 @@ describe('routes /document-model + /predict-next', () => {
     expect((res.json().steps as string[]).length).toBeGreaterThanOrEqual(1);
     expect(res.json().prediction).toContain('\\Bo');
   });
+
+  it('predict-next on a .py file predicts CODE (kind "code", no maths steps)', async () => {
+    const created = await app
+      .inject({ method: 'POST', url: `/projects/${projectId}/files`, headers: auth, payload: { path: 'solver.py', content: 'import numpy as np\n' } })
+      .then((r) => r.json() as { id: string });
+    const res = await app.inject({
+      method: 'POST',
+      url: `/projects/${projectId}/predict-next`,
+      headers: auth,
+      // 'maths' granularity must be IGNORED for Python — the file type wins.
+      payload: { fileId: created.id, cursorLine: 1, granularity: 'maths', card: 'Macros: \\Bo' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().kind).toBe('code');
+    expect(res.json().steps).toBeUndefined();
+  });
 });

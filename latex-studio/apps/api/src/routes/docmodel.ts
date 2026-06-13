@@ -121,31 +121,52 @@ export async function docmodelRoutes(app: FastifyInstance): Promise<void> {
     if (!target) return reply.code(404).send({ error: 'file not found' });
     const content = parsed.data.overrides?.[target.path] ?? target.content;
 
-    const granularity: 'prose' | 'maths' | 'structural' =
-      parsed.data.granularity === 'auto' ? detectGranularity(content, parsed.data.cursorLine) : (parsed.data.granularity as 'prose' | 'maths' | 'structural');
-
+    // Python files predict CODE; .tex files predict prose / maths / structure.
+    // The LaTeX context card + maths/structural granularity are meaningless (and
+    // harmful) for Python, so they're skipped on that path.
+    const isPython = target.path.toLowerCase().endsWith('.py');
     const lines = content.split('\n');
     const from = Math.max(0, parsed.data.cursorLine - 40);
     const window = lines.slice(from, parsed.data.cursorLine).join('\n');
 
-    const user = [
-      parsed.data.card?.trim() ? `Document context card (reuse its notation):\n${parsed.data.card.trim()}` : '',
-      parsed.data.position?.trim() ? `Cursor position: ${parsed.data.position.trim()}.` : '',
-      instruction(granularity),
-      'Text up to the cursor:',
-      window,
-      'Predicted continuation:',
-    ]
-      .filter(Boolean)
-      .join('\n\n');
+    let granularity: 'prose' | 'maths' | 'structural' | 'code';
+    let system: string;
+    let user: string;
+    if (isPython) {
+      granularity = 'code';
+      system =
+        'You predict the continuation of a Python source file. ' +
+        'Output ONLY the Python code to insert at the cursor — no commentary, no markdown fences, no repetition of the existing code. ' +
+        'Match the existing indentation, naming and style.';
+      user = [
+        'Predict the next line or short block of Python that continues this file.',
+        'Code up to the cursor:',
+        window,
+        'Predicted continuation:',
+      ].join('\n\n');
+    } else {
+      const g = parsed.data.granularity === 'auto' ? detectGranularity(content, parsed.data.cursorLine) : (parsed.data.granularity as 'prose' | 'maths' | 'structural');
+      granularity = g;
+      system =
+        'You predict the continuation of a LaTeX document. Use the document context card macros, symbols and notation. ' +
+        'Output ONLY the predicted text/LaTeX to insert — no commentary, no fences, no repetition of the existing text.';
+      user = [
+        parsed.data.card?.trim() ? `Document context card (reuse its notation):\n${parsed.data.card.trim()}` : '',
+        parsed.data.position?.trim() ? `Cursor position: ${parsed.data.position.trim()}.` : '',
+        instruction(g),
+        'Text up to the cursor:',
+        window,
+        'Predicted continuation:',
+      ]
+        .filter(Boolean)
+        .join('\n\n');
+    }
 
     let text = '';
     try {
       for await (const d of app.modelProvider.chatStream(
         {
-          system:
-            'You predict the continuation of a LaTeX document. Use the document context card macros, symbols and notation. ' +
-            'Output ONLY the predicted text/LaTeX to insert — no commentary, no fences, no repetition of the existing text.',
+          system,
           messages: [{ role: 'user', content: user }],
           model: parsed.data.model ?? project.model,
         },

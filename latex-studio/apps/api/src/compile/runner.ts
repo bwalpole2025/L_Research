@@ -10,6 +10,18 @@ export interface ProjectFileInput {
   encoding?: string;
 }
 
+/** TeX engine choice → the matching latexmk engine flag. */
+export type TexEngine = 'pdflatex' | 'xelatex' | 'lualatex';
+
+/** Per-compile options (from the project's compile settings). */
+export interface CompileOptions {
+  engine?: TexEngine;
+  /** Stop at the first error (latexmk -halt-on-error) instead of recovering. */
+  haltOnError?: boolean;
+  /** Skip image rendering for a faster preview (graphicx draft option). */
+  draftMode?: boolean;
+}
+
 export interface TexliveRunner {
   /** Host filesystem path of a project's compile working dir. */
   projectDir(projectId: string): string;
@@ -17,13 +29,30 @@ export interface TexliveRunner {
   artifactPath(projectId: string, relPath: string): string;
   /** Stage the project's files into its working dir. */
   writeFiles(projectId: string, files: ProjectFileInput[]): Promise<void>;
-  /** Run latexmk against the root file. */
-  latexmk(projectId: string, rootFile: string): Promise<SpawnResult>;
+  /** Run latexmk against the root file (pdfLaTeX, recovering, full render by default). */
+  latexmk(projectId: string, rootFile: string, options?: CompileOptions): Promise<SpawnResult>;
   /** Run the synctex CLI with the given args in the project working dir. */
   synctex(projectId: string, args: string[]): Promise<SpawnResult>;
+  /** Run texcount with the given args in the project working dir. */
+  texcount(projectId: string, args: string[]): Promise<SpawnResult>;
 }
 
-const LATEXMK_FLAGS = ['-pdf', '-interaction=nonstopmode', '-synctex=1', '-file-line-error'];
+const ENGINE_FLAG: Record<TexEngine, string> = { pdflatex: '-pdf', xelatex: '-pdfxe', lualatex: '-pdflua' };
+
+/** Build the latexmk flag list for the given engine + options. The base flags
+ *  (nonstop interaction, SyncTeX, file-line errors) are always present so the
+ *  PDF viewer's SyncTeX and the diagnostics parser keep working. */
+export function latexmkFlags(options: CompileOptions = {}): string[] {
+  const engine: TexEngine = options.engine && options.engine in ENGINE_FLAG ? options.engine : 'pdflatex';
+  const flags = [ENGINE_FLAG[engine], '-interaction=nonstopmode', '-synctex=1', '-file-line-error'];
+  // -halt-on-error stops at the first error even under nonstopmode (which only
+  // means "don't pause for keyboard input") — Overleaf's stop-on-first-error.
+  if (options.haltOnError) flags.push('-halt-on-error');
+  // Draft: queue the graphicx draft option before \input so images are boxed,
+  // not rendered — a faster preview. -usepretex sets + enables the pre-TeX code.
+  if (options.draftMode) flags.push('-usepretex=\\PassOptionsToPackage{draft}{graphicx}');
+  return flags;
+}
 
 /**
  * Build the runner that stages files and executes latexmk/synctex either by
@@ -45,10 +74,11 @@ export function createRunner(config: AppConfig): TexliveRunner {
     }
   }
 
-  function latexmk(projectId: string, rootFile: string): Promise<SpawnResult> {
+  function latexmk(projectId: string, rootFile: string, options?: CompileOptions): Promise<SpawnResult> {
     const timeoutMs = config.compileTimeoutMs;
+    const flags = latexmkFlags(options);
     if (config.texliveMode === 'local') {
-      return runProcess('latexmk', [...LATEXMK_FLAGS, rootFile], {
+      return runProcess('latexmk', [...flags, rootFile], {
         cwd: projectDir(projectId),
         timeoutMs,
         killGroup: true,
@@ -57,7 +87,7 @@ export function createRunner(config: AppConfig): TexliveRunner {
     // docker: wrap in an in-container `timeout` so the TeX engine is actually
     // killed; the host-side spawn gets a slightly longer backstop timeout.
     const secs = Math.ceil(timeoutMs / 1000);
-    const inner = ['timeout', '-k', '5', String(secs), 'latexmk', ...LATEXMK_FLAGS, rootFile]
+    const inner = ['timeout', '-k', '5', String(secs), 'latexmk', ...flags, rootFile]
       .map(shellQuote)
       .join(' ');
     return runProcess(
@@ -78,12 +108,24 @@ export function createRunner(config: AppConfig): TexliveRunner {
     );
   }
 
+  function texcount(projectId: string, args: string[]): Promise<SpawnResult> {
+    if (config.texliveMode === 'local') {
+      return runProcess('texcount', args, { cwd: projectDir(projectId), timeoutMs: 20_000 });
+    }
+    return runProcess(
+      'docker',
+      ['exec', '-w', containerDir(projectId), config.texliveContainer, 'texcount', ...args],
+      { timeoutMs: 20_000 },
+    );
+  }
+
   return {
     projectDir,
     artifactPath: (projectId, relPath) => join(projectDir(projectId), relPath),
     writeFiles,
     latexmk,
     synctex,
+    texcount,
   };
 }
 

@@ -48,6 +48,9 @@ export function ProjectSettingsDialog({ open, onClose }: { open: boolean; onClos
   const storedRoot = currentProject?.rootFile ?? 'main.tex';
   const storedRunTarget = currentProject?.pythonRunTarget ?? '';
   const storedNetwork = currentProject?.networkEnabled ?? false;
+  const storedEngine = currentProject?.texEngine ?? 'pdflatex';
+  const storedHalt = currentProject?.haltOnError ?? false;
+  const storedDraft = currentProject?.draftMode ?? false;
   const texPaths = files.filter((f) => /\.tex$/i.test(f.path)).map((f) => f.path);
   const pyPaths = files.filter((f) => /\.py$/i.test(f.path)).map((f) => f.path);
   const models = useAiStore((s) => s.models);
@@ -94,6 +97,9 @@ export function ProjectSettingsDialog({ open, onClose }: { open: boolean; onClos
   const [rootFile, setRootFile] = useState('main.tex');
   const [pythonRunTarget, setPythonRunTarget] = useState('');
   const [networkEnabled, setNetworkEnabled] = useState(false);
+  const [texEngine, setTexEngine] = useState<'pdflatex' | 'xelatex' | 'lualatex'>('pdflatex');
+  const [haltOnError, setHaltOnError] = useState(false);
+  const [draftMode, setDraftMode] = useState(false);
   const [busy, setBusy] = useState(false);
   const [indexStatus, setIndexStatus] = useState<IndexStatus | null>(null);
   const [reindexing, setReindexing] = useState(false);
@@ -108,11 +114,14 @@ export function ProjectSettingsDialog({ open, onClose }: { open: boolean; onClos
     setRootFile(storedRoot);
     setPythonRunTarget(storedRunTarget);
     setNetworkEnabled(storedNetwork);
+    setTexEngine(storedEngine);
+    setHaltOnError(storedHalt);
+    setDraftMode(storedDraft);
     void loadModels();
     if (projectId) {
       api.libraryIndexStatus(projectId).then(setIndexStatus).catch(() => setIndexStatus(null));
     }
-  }, [open, macros, assumptions, storedModel, storedProvider, storedInstructions, storedRoot, storedRunTarget, storedNetwork, loadModels, projectId]);
+  }, [open, macros, assumptions, storedModel, storedProvider, storedInstructions, storedRoot, storedRunTarget, storedNetwork, storedEngine, storedHalt, storedDraft, loadModels, projectId]);
 
   const rebuildIndex = async () => {
     if (!projectId) return;
@@ -141,7 +150,7 @@ export function ProjectSettingsDialog({ open, onClose }: { open: boolean; onClos
     }
     setBusy(true);
     try {
-      await saveSettings({ macros: table, assumptions: assume, model, aiProvider, aiInstructions, pythonRunTarget, networkEnabled, ...(rootFile ? { rootFile } : {}) });
+      await saveSettings({ macros: table, assumptions: assume, model, aiProvider, aiInstructions, pythonRunTarget, networkEnabled, texEngine, haltOnError, draftMode, ...(rootFile ? { rootFile } : {}) });
       onClose();
     } catch (err) {
       window.alert(err instanceof ApiError ? err.message : 'Failed to save settings');
@@ -189,6 +198,48 @@ export function ProjectSettingsDialog({ open, onClose }: { open: boolean; onClos
                 </option>
               ))}
             </select>
+          </section>
+
+          <section className="mt-6">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Compilation</h3>
+            <p className="mt-1 text-xs text-slate-400">
+              How Compile builds this project. The engine and modes are saved per project.
+            </p>
+            <label className="mt-2 block text-xs font-medium text-slate-600 dark:text-slate-300">
+              TeX engine
+              <select
+                value={texEngine}
+                onChange={(e) => setTexEngine(e.target.value as 'pdflatex' | 'xelatex' | 'lualatex')}
+                data-testid="tex-engine-select"
+                className="mt-1 w-full rounded border border-slate-300 bg-transparent px-2 py-1.5 text-sm dark:border-slate-700 dark:bg-slate-900"
+              >
+                <option value="pdflatex">pdfLaTeX (default)</option>
+                <option value="xelatex">XeLaTeX (system fonts, fontspec, Unicode)</option>
+                <option value="lualatex">LuaLaTeX (fontspec, Lua, large memory)</option>
+              </select>
+            </label>
+            <label className="mt-3 flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
+              <input
+                type="checkbox"
+                checked={haltOnError}
+                onChange={(e) => setHaltOnError(e.target.checked)}
+                data-testid="halt-on-error-toggle"
+                className="h-4 w-4"
+              />
+              Stop on first error
+            </label>
+            <p className="ml-6 text-xs text-slate-400">Halt at the first error instead of recovering and continuing.</p>
+            <label className="mt-2 flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
+              <input
+                type="checkbox"
+                checked={draftMode}
+                onChange={(e) => setDraftMode(e.target.checked)}
+                data-testid="draft-mode-toggle"
+                className="h-4 w-4"
+              />
+              Draft / fast mode
+            </label>
+            <p className="ml-6 text-xs text-slate-400">Skip image rendering (graphicx draft) for a faster preview.</p>
           </section>
 
           <section className="mt-6">

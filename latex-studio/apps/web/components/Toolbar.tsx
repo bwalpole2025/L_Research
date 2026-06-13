@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
+  Bug,
   ChevronDown,
   ChevronLeft,
   ClipboardCheck,
@@ -10,17 +11,22 @@ import {
   Download,
   EllipsisVertical,
   FileSearch,
+  HardDrive,
+  Hash,
   History,
+  Link2,
   ListChecks,
   Loader2,
   MessageSquare,
   Moon,
+  Package,
   Play,
   Plus,
   Settings,
   Shapes,
   Share2,
   Sigma,
+  Upload,
   Workflow,
   Sparkles,
   SpellCheck,
@@ -31,14 +37,19 @@ import {
 import { computeOverallStatus, useEditorStore } from '@/lib/store';
 import { useAiStore } from '@/lib/aiStore';
 import { useRunStore } from '@/lib/runStore';
+import { usePythonCheckStore } from '@/lib/pythonCheckStore';
 import { useThesisStore } from '@/lib/thesisStore';
 import { useCoderiveStore } from '@/lib/coderiveStore';
 import { useReviewStore } from '@/lib/reviewStore';
 import { ApiError } from '@/lib/api';
 import { dialog } from '@/lib/dialogStore';
+import { useMenuNav } from '@/lib/a11y';
 import { loadSession } from '@/lib/session';
 import { SaveIndicator } from './SaveIndicator';
 import { CompileStatusPill } from './CompileStatusPill';
+import { GoogleDriveDialog } from './GoogleDriveDialog';
+import { WordCountDialog } from './WordCountDialog';
+import { ExportDialog } from './ExportDialog';
 import { replayProductTour } from './ProductTour';
 
 /**
@@ -83,10 +94,26 @@ export function Toolbar({ onOpenSnapshots, onOpenSettings, onCheckMath }: Toolba
   const stopRun = useRunStore((s) => s.stop);
   const runAndCompile = useRunStore((s) => s.runAndCompile);
   const openRunPicker = useRunStore((s) => s.openPicker);
+  const checkPython = usePythonCheckStore((s) => s.check);
 
   const [toolsOpen, setToolsOpen] = useState(false);
   const [runMenuOpen, setRunMenuOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [wordCountOpen, setWordCountOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [drive, setDrive] = useState<{ open: boolean; tab: 'import' | 'upload' }>({ open: false, tab: 'import' });
   const toolsRef = useRef<HTMLDivElement>(null);
+  const shareRef = useRef<HTMLDivElement>(null);
+  // Keyboard nav (arrow roving + Escape-to-close-and-return-focus) for the menus.
+  const toolsMenuRef = useRef<HTMLDivElement>(null);
+  const shareMenuRef = useRef<HTMLDivElement>(null);
+  const runMenuRef = useRef<HTMLDivElement>(null);
+  const toolsTriggerRef = useRef<HTMLButtonElement>(null);
+  const shareTriggerRef = useRef<HTMLButtonElement>(null);
+  const runTriggerRef = useRef<HTMLButtonElement>(null);
+  useMenuNav(toolsOpen, toolsMenuRef, () => setToolsOpen(false), toolsTriggerRef);
+  useMenuNav(shareOpen, shareMenuRef, () => setShareOpen(false), shareTriggerRef);
+  useMenuNav(runMenuOpen, runMenuRef, () => setRunMenuOpen(false), runTriggerRef);
 
   useEffect(() => {
     if (!toolsOpen) return;
@@ -96,6 +123,20 @@ export function Toolbar({ onOpenSnapshots, onOpenSettings, onCheckMath }: Toolba
     window.addEventListener('mousedown', close);
     return () => window.removeEventListener('mousedown', close);
   }, [toolsOpen]);
+
+  useEffect(() => {
+    if (!shareOpen) return;
+    const close = (e: MouseEvent) => {
+      if (!shareRef.current?.contains(e.target as Node)) setShareOpen(false);
+    };
+    window.addEventListener('mousedown', close);
+    return () => window.removeEventListener('mousedown', close);
+  }, [shareOpen]);
+
+  const openDrive = useCallback((tab: 'import' | 'upload') => {
+    setShareOpen(false);
+    setDrive({ open: true, tab });
+  }, []);
 
   const overall = computeOverallStatus(status, openFileIds);
   const project = projects.find((p) => p.id === projectId);
@@ -128,6 +169,7 @@ export function Toolbar({ onOpenSnapshots, onOpenSettings, onCheckMath }: Toolba
   };
 
   return (
+    <>
     <header className="flex h-14 flex-none items-center justify-between gap-3 border-b border-[var(--ls-line)] bg-[var(--ls-editor-bg)] px-[18px]">
       {/* ── Left: back · title · save state ── */}
       <div className="flex min-w-0 items-center gap-3.5">
@@ -171,8 +213,10 @@ export function Toolbar({ onOpenSnapshots, onOpenSettings, onCheckMath }: Toolba
         <CompileStatusPill />
         <div ref={toolsRef} className="relative">
           <button
+            ref={toolsTriggerRef}
             type="button"
             aria-label="Tools"
+            aria-haspopup="menu"
             data-testid="tools-menu"
             aria-expanded={toolsOpen}
             onClick={() => setToolsOpen((v) => !v)}
@@ -182,6 +226,8 @@ export function Toolbar({ onOpenSnapshots, onOpenSettings, onCheckMath }: Toolba
           </button>
           {/* Always mounted (hidden when closed) so state-reflecting attributes stay readable. */}
           <div
+            ref={toolsMenuRef}
+            role="menu"
             className={`absolute right-0 top-11 z-50 w-64 rounded-xl border border-zinc-200 bg-white p-1.5 shadow-xl dark:border-[#1f2840] dark:bg-[#0d1322] ${toolsOpen ? '' : 'hidden'}`}
           >
             <button type="button" title="Check derivation (⌘⇧↵)" onClick={tool(onCheckMath)} className={menuItem}>
@@ -213,6 +259,12 @@ export function Toolbar({ onOpenSnapshots, onOpenSettings, onCheckMath }: Toolba
             </button>
             <button type="button" onClick={tool(onOpenSnapshots)} className={menuItem}>
               <History className="h-4 w-4" /> Snapshots
+            </button>
+            <button type="button" data-testid="word-count" onClick={tool(() => setWordCountOpen(true))} className={menuItem}>
+              <Hash className="h-4 w-4" /> Word count
+            </button>
+            <button type="button" data-testid="export-project" onClick={tool(() => setExportOpen(true))} className={menuItem}>
+              <Package className="h-4 w-4" /> Export (.zip)
             </button>
             <div className="mx-2 my-1.5 h-px bg-zinc-200 dark:bg-[#1a2133]" />
             <button
@@ -255,13 +307,46 @@ export function Toolbar({ onOpenSnapshots, onOpenSettings, onCheckMath }: Toolba
           </div>
         </div>
 
-        <button
-          type="button"
-          onClick={() => void dialog.alert({ title: 'Sharing', message: 'Sharing is not available in the local construction build yet.' })}
-          className="flex h-9 items-center gap-2 rounded-[9px] border border-zinc-300 px-3.5 text-[13.5px] text-zinc-700 transition-colors hover:bg-zinc-50 dark:border-[#2a3247] dark:text-[#c6cde0] dark:hover:border-[#3a4866] dark:hover:bg-[#10182b]"
-        >
-          <Share2 className="h-[15px] w-[15px]" /> Share
-        </button>
+        <div ref={shareRef} className="relative">
+          <button
+            ref={shareTriggerRef}
+            type="button"
+            data-testid="share-menu"
+            aria-haspopup="menu"
+            aria-expanded={shareOpen}
+            onClick={() => setShareOpen((v) => !v)}
+            className="flex h-9 items-center gap-2 rounded-[9px] border border-zinc-300 px-3.5 text-[13.5px] text-zinc-700 transition-colors hover:bg-zinc-50 dark:border-[#2a3247] dark:text-[#c6cde0] dark:hover:border-[#3a4866] dark:hover:bg-[#10182b]"
+          >
+            <Share2 className="h-[15px] w-[15px]" /> Share
+            <ChevronDown className="h-3 w-3 opacity-70" />
+          </button>
+          <div
+            ref={shareMenuRef}
+            role="menu"
+            className={`absolute right-0 top-11 z-50 w-64 rounded-xl border border-zinc-200 bg-white p-1.5 shadow-xl dark:border-[#1f2840] dark:bg-[#0d1322] ${shareOpen ? '' : 'hidden'}`}
+          >
+            <p className="px-3 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-[#5d688a]">
+              Google Drive
+            </p>
+            <button type="button" data-testid="share-drive-import" onClick={() => openDrive('import')} className={menuItem}>
+              <Download className="h-4 w-4" /> Import from Google Drive…
+            </button>
+            <button type="button" data-testid="share-drive-upload" onClick={() => openDrive('upload')} className={menuItem}>
+              <Upload className="h-4 w-4" /> Upload to Google Drive…
+            </button>
+            <Link
+              href="/plugins"
+              onClick={() => setShareOpen(false)}
+              className={menuItem}
+            >
+              <HardDrive className="h-4 w-4" /> Manage connectors…
+            </Link>
+            <div className="mx-2 my-1.5 h-px bg-zinc-200 dark:bg-[#1a2133]" />
+            <div className="flex items-center gap-2.5 rounded-[9px] px-3 py-2 text-[13px] text-zinc-400 dark:text-[#5d688a]">
+              <Link2 className="h-4 w-4" /> Shareable link — coming soon
+            </div>
+          </div>
+        </div>
 
         {/* Visual diagram editor (separate page). */}
         <Link
@@ -308,8 +393,11 @@ export function Toolbar({ onOpenSnapshots, onOpenSettings, onCheckMath }: Toolba
                 <Terminal className="h-3.5 w-3.5" /> Run
               </button>
               <button
+                ref={runTriggerRef}
                 type="button"
                 aria-label="Run options"
+                aria-haspopup="menu"
+                aria-expanded={runMenuOpen}
                 onClick={() => setRunMenuOpen((v) => !v)}
                 className="flex h-9 items-center rounded-r-[9px] border-l border-emerald-600/60 bg-emerald-500 px-1.5 text-white transition-colors hover:bg-emerald-600"
               >
@@ -320,12 +408,15 @@ export function Toolbar({ onOpenSnapshots, onOpenSettings, onCheckMath }: Toolba
           {runMenuOpen && (
             <>
               <div className="fixed inset-0 z-40" onClick={() => setRunMenuOpen(false)} />
-              <div className="absolute right-0 top-11 z-50 w-56 rounded-xl border border-zinc-200 bg-white p-1.5 shadow-xl dark:border-[#1f2840] dark:bg-[#0d1322]">
+              <div ref={runMenuRef} role="menu" className="absolute right-0 top-11 z-50 w-56 rounded-xl border border-zinc-200 bg-white p-1.5 shadow-xl dark:border-[#1f2840] dark:bg-[#0d1322]">
                 <button type="button" data-testid="run-picker" onClick={() => { setRunMenuOpen(false); openRunPicker(); }} className={menuItem}>
                   <Terminal className="h-4 w-4" /> Run Python file…
                 </button>
                 <button type="button" data-testid="run-and-compile" onClick={() => { setRunMenuOpen(false); void runAndCompile(); }} className={menuItem}>
                   <Play className="h-4 w-4" /> Run &amp; Compile
+                </button>
+                <button type="button" data-testid="python-check" disabled={!canRun} onClick={() => { setRunMenuOpen(false); void checkPython(); }} className={`${menuItem} disabled:opacity-50`}>
+                  <Bug className="h-4 w-4" /> Check for errors (AI)
                 </button>
               </div>
             </>
@@ -364,5 +455,9 @@ export function Toolbar({ onOpenSnapshots, onOpenSettings, onCheckMath }: Toolba
         </Link>
       </div>
     </header>
+    <GoogleDriveDialog open={drive.open} tab={drive.tab} onClose={() => setDrive((d) => ({ ...d, open: false }))} />
+    <WordCountDialog open={wordCountOpen} onClose={() => setWordCountOpen(false)} />
+    <ExportDialog open={exportOpen} onClose={() => setExportOpen(false)} />
+    </>
   );
 }

@@ -10,6 +10,12 @@ export function getString(rec: Record<string, unknown> | undefined, key: string)
   return typeof v === 'string' ? v : undefined;
 }
 
+/** Text of a partial-message `stream_event` delta (when includePartialMessages is on). */
+export function streamDeltaText(m: Record<string, unknown>): string | undefined {
+  const delta = asRecord(asRecord(m['event'])?.['delta']);
+  return getString(delta, 'type') === 'text_delta' ? getString(delta, 'text') : undefined;
+}
+
 /** Concatenate the text blocks of an `assistant` message. */
 export function assistantText(m: Record<string, unknown>): string {
   const content = asRecord(m['message'])?.['content'];

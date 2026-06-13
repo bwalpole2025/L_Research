@@ -56,6 +56,7 @@ import type {
   SyncInverseResult,
   StorageEntry,
   TexFile,
+  WordCountResult,
   XrefReport,
 } from '@latex-studio/shared';
 import type { FileMeta, SnapshotMeta } from './types';
@@ -161,6 +162,9 @@ export const api = {
       folderId?: string | null;
       pythonRunTarget?: string;
       networkEnabled?: boolean;
+      texEngine?: 'pdflatex' | 'xelatex' | 'lualatex';
+      haltOnError?: boolean;
+      draftMode?: boolean;
     },
   ) => request<Project>('PATCH', `/projects/${id}`, patch),
   /** Move a project into a Home folder (null = root). Purely organisational. */
@@ -205,6 +209,7 @@ export const api = {
 
   getCompileStatus: (projectId: string) =>
     request<{ status: 'success' | 'error' | 'timeout' | null; at?: string }>('GET', `/projects/${projectId}/compile-status`),
+  wordCount: (projectId: string) => request<WordCountResult>('GET', `/projects/${projectId}/wordcount`),
   compile: (projectId: string) =>
     request<CompileResponse>('POST', `/projects/${projectId}/compile`),
   syncForward: (req: SyncForwardRequest) =>

@@ -15,10 +15,22 @@ export interface AppConfig {
   port: number;
   /** Shared bearer token required on every non-public route. */
   bearerToken: string;
+  /** Explicit local-dev escape: allow booting with an EMPTY bearer even when
+   *  bound to a non-loopback host (`API_ALLOW_EMPTY_BEARER=1`). Off by default,
+   *  so a non-local deployment with no token fails fast at boot. */
+  allowEmptyBearer: boolean;
   /** Base URL of the SymPy mathcheck microservice. */
   mathcheckUrl: string;
   /** How LaTeX compilation is performed. */
   texliveMode: TexliveMode;
+  /** Global cap on concurrent document compiles (across all projects) so many
+   *  projects/tabs can't overwhelm the resource-capped texlive container. */
+  compileMaxConcurrent: number;
+  /** Rate-limit window (ms) and per-route ceilings for the expensive routes. */
+  rateLimitWindowMs: number;
+  rateLimitCompileMax: number;
+  rateLimitRunMax: number;
+  rateLimitAiMax: number;
   /**
    * Host filesystem directory holding per-project compile working dirs. In
    * docker mode this is bind-mounted into the texlive container at
@@ -114,14 +126,27 @@ export interface AppConfig {
 /** Repo root, derived from this module's location (independent of cwd). */
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 
+/** True when the bind address is loopback-only (a single-user local box). A
+ *  non-loopback bind (0.0.0.0, a LAN IP) is treated as a real deployment that
+ *  must carry a bearer token and a pinned CORS origin. */
+export function isLoopbackHost(host: string): boolean {
+  return host === '127.0.0.1' || host === 'localhost' || host === '::1';
+}
+
 /** Read configuration from the environment, applying safe local defaults. */
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   return {
     host: env.API_HOST ?? '127.0.0.1',
     port: Number.parseInt(env.API_PORT ?? '4000', 10),
     bearerToken: env.API_BEARER_TOKEN ?? '',
+    allowEmptyBearer: env.API_ALLOW_EMPTY_BEARER === '1' || env.API_ALLOW_EMPTY_BEARER === 'true',
     mathcheckUrl: env.MATHCHECK_URL ?? 'http://127.0.0.1:8000',
     texliveMode: env.TEXLIVE_MODE === 'local' ? 'local' : 'docker',
+    compileMaxConcurrent: Math.max(1, Number.parseInt(env.COMPILE_MAX_CONCURRENT ?? '2', 10)),
+    rateLimitWindowMs: Number.parseInt(env.RATE_LIMIT_WINDOW_MS ?? '60000', 10),
+    rateLimitCompileMax: Number.parseInt(env.RATE_LIMIT_COMPILE_MAX ?? '30', 10),
+    rateLimitRunMax: Number.parseInt(env.RATE_LIMIT_RUN_MAX ?? '20', 10),
+    rateLimitAiMax: Number.parseInt(env.RATE_LIMIT_AI_MAX ?? '120', 10),
     compileWorkspace: env.COMPILE_WORKSPACE ?? resolve(REPO_ROOT, '.compile-workspace'),
     texliveWorkspace: env.TEXLIVE_WORKSPACE ?? '/workspace',
     texliveContainer: env.TEXLIVE_CONTAINER ?? 'latex-studio-texlive',

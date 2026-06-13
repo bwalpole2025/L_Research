@@ -65,6 +65,9 @@ describe('compile + synctex routes (mock runner)', () => {
             : `SyncTeX result begin\nOutput:main.pdf\nInput:/workspace/${id}/main.tex\nLine:42\nColumn:-1\nSyncTeX result end\n`;
         return { code: 0, stdout, stderr: '', timedOut: false };
       },
+      async texcount() {
+        return { code: 0, stdout: '5+0+0 (0/0/0/0) File: main.tex\n', stderr: '', timedOut: false };
+      },
     };
 
     const config = { ...loadConfig(), texliveWorkspace: '/workspace', compileWorkspace: workspace };

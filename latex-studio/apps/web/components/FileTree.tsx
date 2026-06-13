@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Shapes,
@@ -58,6 +58,7 @@ export function FileTree() {
   const router = useRouter();
   const files = useEditorStore((s) => s.files);
   const folders = useEditorStore((s) => s.folders);
+  const filesLoading = useEditorStore((s) => s.filesLoading);
   const activeFileId = useEditorStore((s) => s.activeFileId);
   const projectId = useEditorStore((s) => s.projectId);
   const uploadFiles = useEditorStore((s) => s.uploadFiles);
@@ -152,7 +153,9 @@ export function FileTree() {
   }, []);
 
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  const tree = buildTree(files, folders);
+  // Rebuilding the tree is O(n log n); only redo it when files/folders actually
+  // change, not on every unrelated re-render (diagnostics, save status, …).
+  const tree = useMemo(() => buildTree(files, folders), [files, folders]);
 
   const toggle = (path: string) =>
     setCollapsed((prev) => {
@@ -373,7 +376,13 @@ export function FileTree() {
         onChange={(e) => void onUploadChange(e)}
       />
       <div className="flex-1 overflow-auto py-1.5 text-sm">
-        {tree.length === 0 ? (
+        {tree.length === 0 && filesLoading ? (
+          <ul className="space-y-1.5 px-3 py-2" data-testid="file-tree-skeleton" aria-hidden>
+            {[60, 80, 45, 70, 55].map((w, i) => (
+              <li key={i} className="h-3.5 animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" style={{ width: `${w}%` }} />
+            ))}
+          </ul>
+        ) : tree.length === 0 ? (
           <p className="px-3 py-4 text-xs text-zinc-400">No files yet.</p>
         ) : (
           renderNodes(tree, 0)
