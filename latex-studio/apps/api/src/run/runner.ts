@@ -148,6 +148,10 @@ export function buildRunPlan(config: AppConfig, input: RunPlanInput): RunPlan {
     '--rm',
     '--name',
     containerName,
+    // gVisor (runsc) when configured: a user-space kernel intercepts syscalls, so
+    // a hostile script never reaches the host kernel directly. Empty ⇒ daemon
+    // default (runc). See docs/isolation.md.
+    ...(config.pyrunRuntime ? ['--runtime', config.pyrunRuntime] : []),
     '--network',
     networkEnabled ? 'bridge' : 'none',
     `--cpus=${config.pyrunCpus}`,

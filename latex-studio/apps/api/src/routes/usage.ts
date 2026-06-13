@@ -37,9 +37,8 @@ function toRow(s: { key: string; count: number; score: number; firstUsedAt: Date
 }
 
 export async function usageRoutes(app: FastifyInstance): Promise<void> {
-  app.get<{ Params: { id: string } }>('/projects/:id/usage', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+  app.get<{ Params: { id: string } }>('/projects/:id/usage', async (request) => {
+    const project = request.project!;
     const rows = await app.prisma.usageStat.findMany({ where: { scope: { in: ['app', project.id] } } });
     return {
       app: rows.filter((r) => r.scope === 'app').map(toRow),
@@ -48,8 +47,7 @@ export async function usageRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.post<{ Params: { id: string } }>('/projects/:id/usage', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+    const project = request.project!;
     const parsed = postBody.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'Invalid body', details: parsed.error.flatten() });
 
@@ -75,8 +73,7 @@ export async function usageRoutes(app: FastifyInstance): Promise<void> {
   app.delete<{ Params: { id: string }; Querystring: { scope?: string } }>(
     '/projects/:id/usage',
     async (request, reply) => {
-      const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-      if (!project) return reply.callNotFound();
+      const project = request.project!;
       const scope = request.query.scope === 'app' ? 'app' : project.id;
       await app.prisma.usageStat.deleteMany({ where: { scope } });
       return reply.code(204).send();

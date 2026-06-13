@@ -12,10 +12,11 @@ out/
 # Tests / coverage
 coverage/
 
-# Env (never commit secrets — keep .env.example / .env.production.example only)
+# Env (never commit secrets — keep the .env*.example templates only)
 .env
 .env.local
 .env.*.local
+!.env.local.example
 # Real production secrets — committed template is .env.production.example
 .env.production
 !.env.production.example

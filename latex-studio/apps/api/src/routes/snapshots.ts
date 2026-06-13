@@ -15,8 +15,7 @@ interface SnapshotFile {
 export async function snapshotRoutes(app: FastifyInstance): Promise<void> {
   // Create a snapshot: freeze the project's current files into JSONB.
   app.post<{ Params: { id: string } }>('/projects/:id/snapshots', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+    const project = request.project!;
 
     const parsed = createSnapshotBody.safeParse(request.body);
     if (!parsed.success) {
@@ -47,9 +46,8 @@ export async function snapshotRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // List a project's snapshots (metadata only — no file payloads).
-  app.get<{ Params: { id: string } }>('/projects/:id/snapshots', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+  app.get<{ Params: { id: string } }>('/projects/:id/snapshots', async (request) => {
+    const project = request.project!;
 
     const snapshots = await app.prisma.snapshot.findMany({
       where: { projectId: project.id },

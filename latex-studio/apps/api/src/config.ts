@@ -19,6 +19,19 @@ export interface AppConfig {
    *  bound to a non-loopback host (`API_ALLOW_EMPTY_BEARER=1`). Off by default,
    *  so a non-local deployment with no token fails fast at boot. */
   allowEmptyBearer: boolean;
+  /** Production profile (`DEPLOY_PROFILE=production`): enforce strong secrets at
+   *  boot (strong bearer, a master key, no default DB password). See app.ts. */
+  requireStrongSecrets: boolean;
+  /**
+   * When true, every non-public route requires a logged-in USER session (Better
+   * Auth), not just the service bearer — i.e. real multi-user enforcement. Off by
+   * default so loopback dev keeps working before the login UI is wired; ON in
+   * production (`AUTH_REQUIRED=1`, implied by `DEPLOY_PROFILE=production`).
+   */
+  authRequired: boolean;
+  /** Better Auth signing secret (HMAC for sessions/cookies). Falls back to the
+   *  bearer token in dev; set BETTER_AUTH_SECRET explicitly in production. */
+  authSecret: string;
   /** Base URL of the SymPy mathcheck microservice. */
   mathcheckUrl: string;
   /** How LaTeX compilation is performed. */
@@ -26,6 +39,16 @@ export interface AppConfig {
   /** Global cap on concurrent document compiles (across all projects) so many
    *  projects/tabs can't overwhelm the resource-capped texlive container. */
   compileMaxConcurrent: number;
+
+  // ─── Execution gate (shared by compile + run; see exec/gate.ts, docs/isolation.md) ──
+  /** Global cap on concurrent SANDBOX executions across BOTH paths (compile +
+   *  Python run) and all users. Defaults to compileMaxConcurrent (reuses it). */
+  execMaxConcurrent: number;
+  /** Per-user cap on concurrent executions — one user can't monopolise the pool. */
+  execPerUserConcurrent: number;
+  /** Per-user DAILY quota of server-side Python runs (the miner/abuse vector).
+   *  Compiles are NOT daily-capped (compile-on-save). Resets at UTC midnight. */
+  execPerUserDailyRuns: number;
   /** Rate-limit window (ms) and per-route ceilings for the expensive routes. */
   rateLimitWindowMs: number;
   rateLimitCompileMax: number;
@@ -37,6 +60,10 @@ export interface AppConfig {
    * `texliveWorkspace`, so the api (host or container) and texlive share files.
    */
   compileWorkspace: string;
+  /** Log level (pino). Logs are metadata-only — never bodies/content (see lib/logger). */
+  logLevel: string;
+  /** Advertised log-retention default in days (deployment log rotation honours it). */
+  logRetentionDays: number;
   /** Path of the shared workspace *inside* the texlive container. */
   texliveWorkspace: string;
   /** Name of the texlive container to `docker exec` into (docker mode). */
@@ -70,6 +97,9 @@ export interface AppConfig {
   pyrunPids: number;
   /** Non-root user the sandbox runs as (`docker run --user`). */
   pyrunUser: string;
+  /** Container runtime for the pyrun `docker run` (e.g. "runsc" for gVisor).
+   *  Empty ⇒ the daemon default (runc). See docs/isolation.md. */
+  pyrunRuntime: string;
   /**
    * Which ModelProvider backs the AI features. `agent-sdk` uses the Claude
    * Agent SDK over your `claude login` subscription (no API key). `api` selects
@@ -140,14 +170,23 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     port: Number.parseInt(env.API_PORT ?? '4000', 10),
     bearerToken: env.API_BEARER_TOKEN ?? '',
     allowEmptyBearer: env.API_ALLOW_EMPTY_BEARER === '1' || env.API_ALLOW_EMPTY_BEARER === 'true',
+    requireStrongSecrets: env.DEPLOY_PROFILE === 'production' || env.API_REQUIRE_STRONG_SECRETS === '1',
+    authRequired:
+      env.AUTH_REQUIRED === '1' || env.AUTH_REQUIRED === 'true' || env.DEPLOY_PROFILE === 'production',
+    authSecret: env.BETTER_AUTH_SECRET ?? env.API_BEARER_TOKEN ?? '',
     mathcheckUrl: env.MATHCHECK_URL ?? 'http://127.0.0.1:8000',
     texliveMode: env.TEXLIVE_MODE === 'local' ? 'local' : 'docker',
     compileMaxConcurrent: Math.max(1, Number.parseInt(env.COMPILE_MAX_CONCURRENT ?? '2', 10)),
+    execMaxConcurrent: Math.max(1, Number.parseInt(env.EXEC_MAX_CONCURRENT ?? env.COMPILE_MAX_CONCURRENT ?? '2', 10)),
+    execPerUserConcurrent: Math.max(1, Number.parseInt(env.EXEC_PER_USER_CONCURRENT ?? '2', 10)),
+    execPerUserDailyRuns: Math.max(1, Number.parseInt(env.EXEC_PER_USER_DAILY_RUNS ?? '500', 10)),
     rateLimitWindowMs: Number.parseInt(env.RATE_LIMIT_WINDOW_MS ?? '60000', 10),
     rateLimitCompileMax: Number.parseInt(env.RATE_LIMIT_COMPILE_MAX ?? '30', 10),
     rateLimitRunMax: Number.parseInt(env.RATE_LIMIT_RUN_MAX ?? '20', 10),
     rateLimitAiMax: Number.parseInt(env.RATE_LIMIT_AI_MAX ?? '120', 10),
     compileWorkspace: env.COMPILE_WORKSPACE ?? resolve(REPO_ROOT, '.compile-workspace'),
+    logLevel: env.LOG_LEVEL ?? 'info',
+    logRetentionDays: Number(env.LOG_RETENTION_DAYS ?? '7'),
     texliveWorkspace: env.TEXLIVE_WORKSPACE ?? '/workspace',
     texliveContainer: env.TEXLIVE_CONTAINER ?? 'latex-studio-texlive',
     compileTimeoutMs: Number.parseInt(env.COMPILE_TIMEOUT_MS ?? '120000', 10),
@@ -159,6 +198,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     pyrunMemory: env.PYRUN_MEMORY ?? '512m',
     pyrunPids: Number.parseInt(env.PYRUN_PIDS_LIMIT ?? '256', 10),
     pyrunUser: env.PYRUN_USER ?? '1000:1000',
+    pyrunRuntime: env.PYRUN_RUNTIME ?? '',
     modelProvider: env.MODEL_PROVIDER === 'api' ? 'api' : 'agent-sdk',
     model: env.MODEL ?? DEFAULT_MODEL,
     completionsProvider: env.COMPLETIONS_PROVIDER === 'api' ? 'api' : 'agent-sdk',

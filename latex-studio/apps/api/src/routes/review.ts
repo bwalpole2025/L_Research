@@ -37,8 +37,7 @@ function citedKeys(texts: string[]): string[] {
 
 export async function reviewRoutes(app: FastifyInstance): Promise<void> {
   const handler = async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+    const project = request.project!;
     const parsed = reviewBody.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'Invalid body', details: parsed.error.flatten() });
 
@@ -177,8 +176,7 @@ export async function reviewRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Params: { id: string } }>('/projects/:id/check', handler);
 
   app.get<{ Params: { id: string } }>('/projects/:id/review-pdf', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+    const project = request.project!;
     const reviewPath = app.compileService.pdfPath(project.id, project.rootFile).replace(/\.pdf$/, '.review.pdf');
     let buffer: Buffer;
     try {

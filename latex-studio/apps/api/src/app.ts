@@ -4,9 +4,14 @@ import sensible from '@fastify/sensible';
 import rateLimit from '@fastify/rate-limit';
 import type { ModelProvider } from '@latex-studio/shared';
 import { loadConfig, isLoopbackHost, type AppConfig } from './config.js';
+import { buildLoggerOptions } from './lib/logger.js';
+import { toNodeHandler } from 'better-auth/node';
 import { authPlugin } from './plugins/auth.js';
+import { ownershipPlugin } from './plugins/ownership.js';
+import { createAuth, type Auth } from './auth/betterAuth.js';
 import { prismaPlugin } from './prisma.js';
 import { CompileService } from './compile/service.js';
+import { ExecutionGate } from './exec/gate.js';
 import { CompletionService, type CompletionRunner } from './ai/completion/service.js';
 import { assertSubscriptionAuth, createModelProvider } from './providers/index.js';
 import { healthRoutes } from './routes/health.js';
@@ -34,6 +39,10 @@ declare module 'fastify' {
   interface FastifyInstance {
     config: AppConfig;
     vault: Vault;
+    /** Better Auth instance (email+password, self-hosted in Postgres). */
+    auth: Auth;
+    /** Shared admission gate for server-side sandbox work (compile + run). */
+    execGate: ExecutionGate;
   }
 }
 
@@ -42,12 +51,46 @@ export interface BuildAppOptions {
   config?: Partial<AppConfig>;
   /** Forwarded to Fastify; disable logging in tests with `false`. */
   logger?: boolean;
+  /** Capture logs to a stream (tests assert no content/bodies are logged). */
+  logStream?: NodeJS.WritableStream;
   /** Inject a CompileService (e.g. with a mock runner in tests). */
   compileService?: CompileService;
   /** Inject a ModelProvider (e.g. a mock in tests). */
   modelProvider?: ModelProvider;
   /** Inject a CompletionRunner (e.g. a mock in tests). */
   completionService?: CompletionRunner;
+}
+
+/**
+ * Strong-secrets gate for the production profile (DEPLOY_PROFILE=production):
+ * refuse to boot on a missing or weak secret rather than silently standing up an
+ * internet-fronted instance with a default password / no encryption key.
+ */
+function assertDeploymentSecrets(config: AppConfig): void {
+  const weak = new Set(['', 'changeme', 'change-me', 'secret', 'password', 'latex', 'test', 'dev', 'token', 'bearer', 'example', 'admin']);
+  const problems: string[] = [];
+
+  const token = config.bearerToken.trim();
+  if (token.length < 24 || weak.has(token.toLowerCase())) {
+    problems.push('API_BEARER_TOKEN must be a strong random value (≥24 chars). Generate: openssl rand -base64 32');
+  }
+
+  const master = config.connectorsMasterKey.trim();
+  if (!master) {
+    problems.push('CONNECTORS_MASTER_KEY is required in a container (no OS keychain) — it encrypts document content and the credential vault. Generate: openssl rand -base64 32');
+  } else if (Buffer.from(master, 'base64').length < 32 && master.length < 32) {
+    problems.push('CONNECTORS_MASTER_KEY is too short — use ≥32 bytes (openssl rand -base64 32).');
+  }
+
+  if (!config.databaseUrl.trim()) {
+    problems.push('DATABASE_URL is required.');
+  } else if (/:\/\/[^:@/]+:latex@/.test(config.databaseUrl)) {
+    problems.push('DATABASE_URL still uses the default "latex" password — set a strong POSTGRES_PASSWORD.');
+  }
+
+  if (problems.length > 0) {
+    throw new Error(`Refusing to boot (DEPLOY_PROFILE=production) — insufficient secrets:\n  - ${problems.join('\n  - ')}`);
+  }
 }
 
 /**
@@ -71,14 +114,27 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     );
   }
 
+  // Production profile (internet-fronted): refuse to boot on any missing/weak secret.
+  if (config.requireStrongSecrets) assertDeploymentSecrets(config);
+
   // Refuse to boot if an API key would silently override subscription auth.
   // (Injected providers in tests skip this — they don't touch the SDK.)
   if (!options.modelProvider) assertSubscriptionAuth(config);
 
   // 24 MB body limit accommodates base64-encoded figure/font uploads (~33% larger).
-  const app = Fastify({ logger: options.logger ?? true, bodyLimit: 24 * 1024 * 1024 });
+  // Logs are metadata-only (no bodies/content/AI text) and redact credentials.
+  const logger = options.logger === false ? false : buildLoggerOptions(config, options.logStream);
+  const app = Fastify({ logger, bodyLimit: 24 * 1024 * 1024 });
   app.decorate('config', config);
-  app.decorate('compileService', options.compileService ?? new CompileService(config));
+  // One shared admission gate for ALL server-side sandbox work (compile + run):
+  // global + per-user concurrency, and a per-user daily quota on runs.
+  const execGate = new ExecutionGate({
+    globalMax: config.execMaxConcurrent,
+    perUserMax: config.execPerUserConcurrent,
+    dailyRunsPerUser: config.execPerUserDailyRuns,
+  });
+  app.decorate('execGate', execGate);
+  app.decorate('compileService', options.compileService ?? new CompileService(config, undefined, execGate));
   app.decorate('modelProvider', options.modelProvider ?? createModelProvider(config));
   app.decorate('completionService', options.completionService ?? new CompletionService(config, app.modelProvider));
   app.addHook('onClose', async () => app.completionService.shutdown());
@@ -89,6 +145,11 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   // can't drive the api with the user's ambient credentials.
   await app.register(cors, { origin: localOnly ? true : config.webBaseUrl });
   await app.register(prismaPlugin);
+
+  // Better Auth (user sessions, self-hosted in our Postgres). Decorate here so
+  // the ownership guard can resolve the session; the /auth/* handler is mounted
+  // AFTER the ownership plugin so its boot-time route audit classifies it.
+  app.decorate('auth', createAuth(app.prisma, config));
 
   // Attach a per-route rate limit to the expensive endpoints WITHOUT editing the
   // route files (keeps the verification stack untouched). Matched by method+URL.
@@ -151,9 +212,31 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     reply.code(status).send({ error: status >= 500 ? 'Internal server error' : err.message });
   });
 
-  // Auth first (global onRequest hook), then routes. Public paths are
-  // allow-listed inside the auth plugin.
+  // Auth first (global onRequest hook), then the ownership guard, then routes.
+  // Public paths are allow-listed inside the auth plugin; the ownership plugin's
+  // onRoute audit + single preHandler must be registered BEFORE the routes so
+  // they cover every one (and no route can bypass the guard).
   await app.register(authPlugin);
+  await app.register(ownershipPlugin);
+
+  // Mount Better Auth at /auth/* (the browser calls /api/auth/* → Next proxy).
+  // Registered AFTER ownershipPlugin so its onRoute audit classifies /auth/*
+  // (public). ENCAPSULATED with a pass-through body parser so Better Auth reads
+  // the raw request stream itself — scoped here, JSON parsing stays intact
+  // everywhere else.
+  await app.register(async (authScope) => {
+    authScope.addContentTypeParser('application/json', (_req, _payload, done) => done(null, null));
+    const handler = toNodeHandler(app.auth);
+    authScope.route({
+      method: ['GET', 'POST'],
+      url: '/auth/*',
+      handler: async (request, reply) => {
+        reply.hijack();
+        await handler(request.raw, reply.raw);
+      },
+    });
+  });
+
   await app.register(healthRoutes);
 
   // Feature routes (all bearer-protected).

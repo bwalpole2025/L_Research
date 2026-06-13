@@ -115,8 +115,7 @@ export async function thesisRoutes(app: FastifyInstance): Promise<void> {
   // ── Feature 1: chapter/project maths audit ──────────────────────────────────
 
   app.post<{ Params: { id: string } }>('/projects/:id/audit-maths', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+    const project = request.project!;
     const parsed = auditBody.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'Invalid body', details: parsed.error.flatten() });
 
@@ -139,8 +138,7 @@ export async function thesisRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.post<{ Params: { id: string } }>('/projects/:id/explain-step', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+    const project = request.project!;
     const parsed = explainBody.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'Invalid body', details: parsed.error.flatten() });
 
@@ -209,17 +207,15 @@ export async function thesisRoutes(app: FastifyInstance): Promise<void> {
 
   // ── Feature 3: outline + cross-reference health ─────────────────────────────
 
-  app.post<{ Params: { id: string } }>('/projects/:id/outline', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+  app.post<{ Params: { id: string } }>('/projects/:id/outline', async (request) => {
+    const project = request.project!;
     const parsed = thesisBody.safeParse(request.body ?? {});
     const files = await loadProjectFiles(app, project.id, parsed.success ? parsed.data.overrides : undefined);
     return { roots: parseProject(textFiles(files), project.rootFile).outline };
   });
 
-  app.post<{ Params: { id: string } }>('/projects/:id/xref', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+  app.post<{ Params: { id: string } }>('/projects/:id/xref', async (request) => {
+    const project = request.project!;
     const parsed = thesisBody.safeParse(request.body ?? {});
     const files = await loadProjectFiles(app, project.id, parsed.success ? parsed.data.overrides : undefined);
     return parseProject(textFiles(files), project.rootFile).xref;
@@ -228,8 +224,7 @@ export async function thesisRoutes(app: FastifyInstance): Promise<void> {
   // ── Feature 2: LaTeX-aware prose check + per-project dictionary ──────────────
 
   app.post<{ Params: { id: string } }>('/projects/:id/prose-check', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+    const project = request.project!;
     const parsed = proseBody.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'Invalid body', details: parsed.error.flatten() });
 
@@ -247,15 +242,13 @@ export async function thesisRoutes(app: FastifyInstance): Promise<void> {
     return checkProse(files, { rules, customWords: project.customWords, ...(languageToolUrl ? { languageToolUrl } : {}) });
   });
 
-  app.get<{ Params: { id: string } }>('/projects/:id/dictionary', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+  app.get<{ Params: { id: string } }>('/projects/:id/dictionary', async (request) => {
+    const project = request.project!;
     return { customWords: project.customWords };
   });
 
   app.post<{ Params: { id: string } }>('/projects/:id/dictionary', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+    const project = request.project!;
     const parsed = dictionaryBody.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'Invalid body', details: parsed.error.flatten() });
 
@@ -270,9 +263,8 @@ export async function thesisRoutes(app: FastifyInstance): Promise<void> {
 
   // ── Combined pre-submit dashboard ───────────────────────────────────────────
 
-  app.post<{ Params: { id: string } }>('/projects/:id/pre-submit', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+  app.post<{ Params: { id: string } }>('/projects/:id/pre-submit', async (request) => {
+    const project = request.project!;
     const parsed = thesisBody.safeParse(request.body ?? {});
     const overrides = parsed.success ? parsed.data.overrides : undefined;
 

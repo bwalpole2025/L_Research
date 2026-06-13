@@ -32,8 +32,7 @@ const coderiveBody = z.object({
 
 export async function coderiveRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Params: { id: string } }>('/projects/:id/coderive', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+    const project = request.project!;
     const parsed = coderiveBody.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'Invalid body', details: parsed.error.flatten() });
 

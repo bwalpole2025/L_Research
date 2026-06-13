@@ -186,10 +186,12 @@ describe('global error handler', () => {
       modelProvider: new MockProvider(),
     });
     // Add probe routes BEFORE ready(); they inherit the global error handler + auth.
-    app.get('/__boom__', async () => {
+    // Declare ownership inline so the no-bypass audit accepts these test routes.
+    const pub = { config: { ownership: { kind: 'public' } } };
+    app.get('/__boom__', pub, async () => {
       throw new Error('kaboom internals: secret stack');
     });
-    app.get('/__bad__', async () => {
+    app.get('/__bad__', pub, async () => {
       const err = new Error('that input was invalid') as Error & { statusCode?: number };
       err.statusCode = 400;
       throw err;

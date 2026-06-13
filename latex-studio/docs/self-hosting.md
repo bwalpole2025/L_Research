@@ -1,4 +1,9 @@
-# Self-hosting LaTeX Studio privately (VPN-only)
+# Self-hosting LaTeX Studio privately (VPN-only) — the LOCAL tier
+
+> This is the **LOCAL (private) tier** of LaTeX Studio's two deployment tiers — see
+> [deployment-tiers.md](deployment-tiers.md) for how it relates to the HOSTED
+> (Cloudflare) tier. Same codebase, different compose override + env file:
+> `docker-compose.local.yml` + `.env.local`.
 
 This runbook stands the app up on **one host you control**, reachable **only over a
 private tunnel** (Tailscale or WireGuard) — never the public internet. It is the
@@ -32,7 +37,7 @@ has **no public exposure or accounts** by design.
                                               └────────────────┘
 ```
 
-- **Network binding** — only Caddy is published, and `docker-compose.prod.yml`
+- **Network binding** — only Caddy is published, and `docker-compose.local.yml`
   binds it to `${TUNNEL_BIND_ADDR}` (your tunnel IP). `web`, `api`, `postgres`,
   `mathcheck`, `pyrun`, `texlive` have **no published ports** — they exist only on
   the internal docker network. The api/web listeners bind `0.0.0.0` **inside their
@@ -50,7 +55,7 @@ has **no public exposure or accounts** by design.
   pids-capped, `no-new-privileges`, `cap_drop: ALL`. `pyrun` executions are
   throwaway `docker run --rm` with `--network none` + the same caps. A pathological
   `.tex` or script is contained, not host-fatal.
-- **Secrets** — come from `.env.production` (gitignored); compose fails fast if any
+- **Secrets** — come from `.env.local` (gitignored); compose fails fast if any
   are unset. Nothing is hardcoded.
 
 ---
@@ -84,10 +89,10 @@ Use that as `TUNNEL_BIND_ADDR` and a name you resolve to it as `TUNNEL_HOSTNAME`
 
 ---
 
-## 2. Configure secrets (`.env.production`)
+## 2. Configure secrets (`.env.local`)
 
 ```bash
-cp .env.production.example .env.production
+cp .env.local.example .env.local
 ```
 Fill it in. Generate strong secrets:
 ```bash
@@ -97,30 +102,30 @@ getent group docker | cut -d: -f3   # DOCKER_GID
 tailscale ip -4          # TUNNEL_BIND_ADDR
 ```
 Required, no defaults: `TUNNEL_BIND_ADDR`, `TUNNEL_HOSTNAME`, `API_BEARER_TOKEN`,
-`POSTGRES_PASSWORD`, `CONNECTORS_MASTER_KEY`, `DOCKER_GID`, `COMPILE_WORKSPACE_HOST`.
+`POSTGRES_PASSWORD`, `CONNECTORS_MASTER_KEY`, `DOCKER_GID`, `COMPILE_WORKSPACE`.
 
 Create the workspace dir on disk (Section 5 says where):
 ```bash
-sudo mkdir -p /srv/latex-studio/workspace     # = COMPILE_WORKSPACE_HOST
+sudo mkdir -p /srv/latex-studio/workspace     # = COMPILE_WORKSPACE
 ```
-`.env.production` is **gitignored** — it never enters version control or the image.
+`.env.local` is **gitignored** — it never enters version control or the image.
 
 ---
 
 ## 3. Bring up the stack (bound to the private interface)
 
 ```bash
-docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
+docker compose --env-file .env.local -f docker-compose.yml -f docker-compose.local.yml up -d --build
 ```
 Then run the database migrations once:
 ```bash
-docker compose -f docker-compose.prod.yml --env-file .env.production \
+docker compose --env-file .env.local -f docker-compose.yml -f docker-compose.local.yml \
   exec api pnpm --filter @latex-studio/api exec prisma migrate deploy
 ```
 Check everything is healthy and that **only caddy** publishes a port:
 ```bash
-docker compose -f docker-compose.prod.yml --env-file .env.production ps
-docker compose -f docker-compose.prod.yml --env-file .env.production config \
+docker compose --env-file .env.local -f docker-compose.yml -f docker-compose.local.yml ps
+docker compose --env-file .env.local -f docker-compose.yml -f docker-compose.local.yml config \
   | grep -A3 'published'      # → exactly one mapping, host_ip = your tunnel IP
 ```
 
@@ -194,7 +199,7 @@ the port.)
 ## 7. Backups (it now holds real work)
 
 **Where the data lives:** Postgres in the `pgdata` named volume; the compile
-workspace at `COMPILE_WORKSPACE_HOST` (e.g. `/srv/latex-studio/workspace`).
+workspace at `COMPILE_WORKSPACE` (e.g. `/srv/latex-studio/workspace`).
 
 `scripts/backup.sh` writes a `pg_dump` + a workspace archive (+ SHA256SUMS) to
 `./backups/<timestamp>/`, optionally mirrored to a second location:
@@ -210,7 +215,7 @@ BACKUP_MIRROR=/mnt/usb-backup ./scripts/backup.sh   # also copy to an attached d
 ### Restore
 ```bash
 ./scripts/restore.sh backups/20260613-030000
-docker compose -f docker-compose.prod.yml --env-file .env.production restore api web
+docker compose --env-file .env.local -f docker-compose.yml -f docker-compose.local.yml restore api web
 ```
 This verifies checksums, restores the DB (the dump drops & recreates objects) and
 the workspace, then you restart. Test a restore into a throwaway dir periodically —
@@ -223,15 +228,15 @@ an untested backup is a hope, not a backup.
 - **App code / images:**
   ```bash
   git pull
-  docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
-  docker compose -f docker-compose.prod.yml --env-file .env.production \
+  docker compose --env-file .env.local -f docker-compose.yml -f docker-compose.local.yml up -d --build
+  docker compose --env-file .env.local -f docker-compose.yml -f docker-compose.local.yml \
     exec api pnpm --filter @latex-studio/api exec prisma migrate deploy
   ```
 - **TeX Live:** the `texlive/texlive:latest-full` image is network-isolated, so you
   don't `tlmgr install` inside it — you refresh the whole image:
   ```bash
-  docker compose -f docker-compose.prod.yml --env-file .env.production pull texlive
-  docker compose -f docker-compose.prod.yml --env-file .env.production up -d texlive
+  docker compose --env-file .env.local -f docker-compose.yml -f docker-compose.local.yml pull texlive
+  docker compose --env-file .env.local -f docker-compose.yml -f docker-compose.local.yml up -d texlive
   ```
 - **Base images (caddy/postgres/pgvector):** `... pull && ... up -d`. Back up first.
 
@@ -240,8 +245,8 @@ an untested backup is a hope, not a backup.
 ## 9. Rotating secrets & the bearer
 
 1. Generate a new value (`openssl rand -hex 32`).
-2. Update it in `.env.production`.
-3. `docker compose -f docker-compose.prod.yml --env-file .env.production up -d` to
+2. Update it in `.env.local`.
+3. `docker compose --env-file .env.local -f docker-compose.yml -f docker-compose.local.yml up -d` to
    recreate the affected containers (api **and** web for the bearer, so the proxy
    and the validator stay in lockstep).
 4. **Postgres password:** rotating `POSTGRES_PASSWORD` only affects a *fresh* data
@@ -258,7 +263,7 @@ an untested backup is a hope, not a backup.
 `${TUNNEL_HOSTNAME}`. The tunnel already encrypts the wire, so this is mainly to
 satisfy the browser. To avoid the warning, trust Caddy's root on each client:
 ```bash
-docker compose -f docker-compose.prod.yml --env-file .env.production \
+docker compose --env-file .env.local -f docker-compose.yml -f docker-compose.local.yml \
   cp caddy:/data/caddy/pki/authorities/local/root.crt ./caddy-root.crt
 # import caddy-root.crt into the OS/browser trust store on each device
 ```

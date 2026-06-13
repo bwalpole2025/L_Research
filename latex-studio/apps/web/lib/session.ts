@@ -1,10 +1,11 @@
 'use client';
 
 /**
- * CONSTRUCTION-PHASE SESSION — a front-end login scaffold, NOT real security.
- * The app remains single-user and locally hosted; the API stays gated by its
- * bearer token. These dummy accounts exist so the login flow, guards and
- * per-user UI can be built now and swapped for real auth later.
+ * NON-SECRET display profile for the UI chrome (avatar initials, the user's name
+ * in the nav). The REAL session is a Better Auth HttpOnly cookie the browser
+ * holds and the server validates on every request — it is never readable from JS.
+ * This localStorage blob carries only the display name/email; it is NOT an auth
+ * token and grants nothing on its own.
  */
 
 export interface Session {
@@ -12,11 +13,6 @@ export interface Session {
   name: string;
   signedInAt: string;
 }
-
-export const DEMO_ACCOUNTS: Array<{ email: string; password: string; name: string; hint: string }> = [
-  { email: 'ben@latexstudio.local', password: 'plateau', name: 'Ben Walpole', hint: 'owner' },
-  { email: 'demo@latexstudio.local', password: 'demo', name: 'Demo User', hint: 'guest' },
-];
 
 const SESSION_KEY = 'latex-studio:session';
 
@@ -32,19 +28,20 @@ export function loadSession(): Session | null {
   }
 }
 
-/** Returns the session on success, null on bad credentials. */
-export function signIn(email: string, password: string): Session | null {
-  const account = DEMO_ACCOUNTS.find((a) => a.email === email.trim().toLowerCase() && a.password === password);
-  if (!account) return null;
-  const session: Session = { email: account.email, name: account.name, signedInAt: new Date().toISOString() };
+/** Cache the display profile after a successful Better Auth sign-in. */
+export function saveSession(profile: { email: string; name?: string | null }): void {
+  if (typeof window === 'undefined') return;
   try {
-    window.localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    window.localStorage.setItem(
+      SESSION_KEY,
+      JSON.stringify({ email: profile.email, name: profile.name || profile.email, signedInAt: new Date().toISOString() }),
+    );
   } catch {
     /* ignore */
   }
-  return session;
 }
 
+/** Clear the cached display profile (call alongside Better Auth signOut). */
 export function signOut(): void {
   try {
     window.localStorage.removeItem(SESSION_KEY);

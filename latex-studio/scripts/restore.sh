@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 # Restore the self-hosted stack from a backup directory produced by backup.sh.
 # DESTRUCTIVE: replaces the database contents and the compile workspace.
-# See docs/self-hosting.md → "Restore".
+# See docs/deploy-single-host.md → "Restore".
 #
 #   ./scripts/restore.sh backups/20260613-030000
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 SRC="${1:?usage: scripts/restore.sh <backups/TIMESTAMP>}"
-COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
+PROD_FILE="${PROD_FILE:-docker-compose.prod.yml}"
 ENV_FILE="${ENV_FILE:-.env.production}"
 set -a; [ -f "$ENV_FILE" ] && . "$ENV_FILE"; set +a
 
-WORKSPACE="${COMPILE_WORKSPACE_HOST:?COMPILE_WORKSPACE_HOST not set (check $ENV_FILE)}"
-DC=(docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE")
+WORKSPACE="${COMPILE_WORKSPACE:?COMPILE_WORKSPACE not set (check $ENV_FILE)}"
+DC=(docker compose -f docker-compose.yml -f "$PROD_FILE" --env-file "$ENV_FILE")
 
 [ -f "$SRC/db.sql.gz" ] || { echo "no db.sql.gz in $SRC" >&2; exit 1; }
 [ -f "$SRC/workspace.tar.gz" ] || { echo "no workspace.tar.gz in $SRC" >&2; exit 1; }

@@ -7,6 +7,7 @@ import { api } from '@/lib/api';
 import { useEditorStore } from '@/lib/store';
 import { useRunStore } from '@/lib/runStore';
 import { usePythonCheckStore } from '@/lib/pythonCheckStore';
+import { getPythonRuntime, setPythonRuntime, type PythonRuntime } from '@/lib/python/runtime';
 
 /**
  * Python "Run" output window: a live console (stdout/stderr distinct), a status
@@ -78,6 +79,10 @@ export function PythonOutputPanel() {
   const [lightbox, setLightbox] = useState<RunArtifact | null>(null);
   const [added, setAdded] = useState<Set<string>>(new Set());
   const [adding, setAdding] = useState<string | null>(null);
+  // Where Python runs (Pyodide in-browser vs sandboxed server). Read after mount
+  // so localStorage doesn't cause a hydration mismatch.
+  const [runtime, setRuntime] = useState<PythonRuntime>('client');
+  useEffect(() => setRuntime(getPythonRuntime()), []);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // A fresh run clears the "added to files" marks.
@@ -139,6 +144,19 @@ export function PythonOutputPanel() {
           <span className={info.tone}>{info.text}</span>
         </div>
         <div className="flex items-center gap-1">
+          <button
+            type="button"
+            data-testid="run-runtime-toggle"
+            title="Where Python runs — Browser (Pyodide/WASM, private to you, never touches the server) or Server (sandboxed, for workloads the browser can't handle). Click to switch."
+            onClick={() => {
+              const next: PythonRuntime = runtime === 'client' ? 'server' : 'client';
+              setPythonRuntime(next);
+              setRuntime(next);
+            }}
+            className="rounded-md border border-[var(--ls-line)] px-2 py-1 text-[11px] text-[var(--ls-muted)] transition-colors hover:bg-[var(--ls-surface-muted)] hover:text-[var(--ls-text)]"
+          >
+            {runtime === 'client' ? 'Run: Browser' : 'Run: Server'}
+          </button>
           {running && (
             <button
               type="button"

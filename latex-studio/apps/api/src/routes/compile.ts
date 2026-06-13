@@ -4,6 +4,7 @@ import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import type { CompileService } from '../compile/service.js';
 import { resolveAndPersistRoot } from '../compile/rootResolve.js';
+import { principalKey } from '../auth/principal.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -42,9 +43,8 @@ async function sendFile(reply: FastifyReply, path: string, contentType: string):
 
 export async function compileRoutes(app: FastifyInstance): Promise<void> {
   /** Latest compile outcome (dashboard badge): green/orange/red at a glance. */
-  app.get<{ Params: { id: string } }>('/projects/:id/compile-status', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+  app.get<{ Params: { id: string } }>('/projects/:id/compile-status', async (request) => {
+    const project = request.project!;
     const last = await app.prisma.compileLog.findFirst({
       where: { projectId: project.id },
       orderBy: { createdAt: 'desc' },
@@ -56,9 +56,8 @@ export async function compileRoutes(app: FastifyInstance): Promise<void> {
   const svc = app.compileService;
 
   // Compile a project (queued one-per-project).
-  app.post<{ Params: { id: string } }>('/projects/:id/compile', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+  app.post<{ Params: { id: string } }>('/projects/:id/compile', async (request) => {
+    const project = request.project!;
 
     const files = await app.prisma.texFile.findMany({
       where: { projectId: project.id },
@@ -78,6 +77,7 @@ export async function compileRoutes(app: FastifyInstance): Promise<void> {
       rootFile: resolved.rootFile,
       files,
       options: { engine, haltOnError: project.haltOnError, draftMode: project.draftMode },
+      userKey: principalKey(request.principal),
     });
 
     if (resolved.fellBack && result.status !== 'superseded') {
@@ -109,9 +109,8 @@ export async function compileRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // LaTeX-aware word count (texcount): total + per-file/included-file breakdown.
-  app.get<{ Params: { id: string } }>('/projects/:id/wordcount', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+  app.get<{ Params: { id: string } }>('/projects/:id/wordcount', async (request) => {
+    const project = request.project!;
     const files = await app.prisma.texFile.findMany({
       where: { projectId: project.id },
       select: { path: true, content: true, encoding: true },
@@ -124,15 +123,13 @@ export async function compileRoutes(app: FastifyInstance): Promise<void> {
 
   // Serve the produced PDF (authenticated — this route is behind the bearer hook).
   app.get<{ Params: { id: string } }>('/projects/:id/pdf', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+    const project = request.project!;
     return sendFile(reply, svc.pdfPath(project.id, project.rootFile), 'application/pdf');
   });
 
   // Serve the .synctex.gz.
   app.get<{ Params: { id: string } }>('/projects/:id/synctex', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+    const project = request.project!;
     return sendFile(reply, svc.synctexPath(project.id, project.rootFile), 'application/gzip');
   });
 
@@ -142,8 +139,7 @@ export async function compileRoutes(app: FastifyInstance): Promise<void> {
     if (!parsed.success) {
       return reply.code(400).send({ error: 'Invalid body', details: parsed.error.flatten() });
     }
-    const project = await app.prisma.project.findUnique({ where: { id: parsed.data.projectId } });
-    if (!project) return reply.callNotFound();
+    const project = request.project!;
 
     return svc.forward(
       project.id,
@@ -160,8 +156,7 @@ export async function compileRoutes(app: FastifyInstance): Promise<void> {
     if (!parsed.success) {
       return reply.code(400).send({ error: 'Invalid body', details: parsed.error.flatten() });
     }
-    const project = await app.prisma.project.findUnique({ where: { id: parsed.data.projectId } });
-    if (!project) return reply.callNotFound();
+    const project = request.project!;
 
     const result = await svc.inverse(
       project.id,

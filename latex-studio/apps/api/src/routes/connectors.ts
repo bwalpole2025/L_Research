@@ -93,8 +93,7 @@ export async function connectorRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Params: { projectId: string; id: string }; Body: unknown }>(
     '/projects/:projectId/storage/:id/import',
     async (request, reply) => {
-      const project = await app.prisma.project.findUnique({ where: { id: request.params.projectId } });
-      if (!project) return reply.callNotFound();
+      const project = request.project!;
       const parsed = storageImportBody.safeParse(request.body);
       if (!parsed.success) return reply.code(400).send({ error: 'Invalid body', details: parsed.error.flatten() });
       const check = validateFilePath(parsed.data.path);
@@ -136,8 +135,7 @@ export async function connectorRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Params: { projectId: string; id: string }; Body: unknown }>(
     '/projects/:projectId/storage/:id/upload',
     async (request, reply) => {
-      const project = await app.prisma.project.findUnique({ where: { id: request.params.projectId } });
-      if (!project) return reply.callNotFound();
+      const project = request.project!;
       const parsed = storageUploadBody.safeParse(request.body);
       if (!parsed.success) return reply.code(400).send({ error: 'Invalid body', details: parsed.error.flatten() });
       const file = await app.prisma.texFile.findFirst({ where: { id: parsed.data.fileId, projectId: project.id } });

@@ -61,9 +61,8 @@ function instruction(g: 'prose' | 'maths' | 'structural'): string {
 }
 
 export async function docmodelRoutes(app: FastifyInstance): Promise<void> {
-  app.post<{ Params: { id: string } }>('/projects/:id/document-model', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+  app.post<{ Params: { id: string } }>('/projects/:id/document-model', async (request) => {
+    const project = request.project!;
     const parsed = docModelBody.safeParse(request.body ?? {});
     const data = parsed.success ? parsed.data : {};
     const files = await loadTextFiles(app, project.id, data.overrides);
@@ -112,8 +111,7 @@ export async function docmodelRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.post<{ Params: { id: string } }>('/projects/:id/predict-next', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+    const project = request.project!;
     const parsed = predictBody.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'Invalid body', details: parsed.error.flatten() });
 

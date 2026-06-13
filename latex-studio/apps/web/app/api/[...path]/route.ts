@@ -26,6 +26,12 @@ async function proxy(request: NextRequest, path: string[]): Promise<NextResponse
   const contentType = request.headers.get('content-type');
   if (contentType) headers.set('content-type', contentType);
   headers.set('authorization', `Bearer ${BEARER}`);
+  // Forward the user's session cookie + Origin so Better Auth can read/validate
+  // the session on the api (the browser's HttpOnly cookie never reaches JS).
+  const cookie = request.headers.get('cookie');
+  if (cookie) headers.set('cookie', cookie);
+  const origin = request.headers.get('origin');
+  if (origin) headers.set('origin', origin);
 
   const method = request.method;
   const init: RequestInit = { method, headers, cache: 'no-store' };
@@ -40,10 +46,14 @@ async function proxy(request: NextRequest, path: string[]): Promise<NextResponse
     return NextResponse.json({ error: 'Upstream api is unreachable' }, { status: 502 });
   }
 
-  // Stream the body through; copy content-type.
+  // Stream the body through; copy content-type and relay Set-Cookie (the auth
+  // endpoints set the session cookie) back to the browser.
   const resHeaders = new Headers();
   const upstreamType = upstream.headers.get('content-type');
   if (upstreamType) resHeaders.set('content-type', upstreamType);
+  for (const sc of upstream.headers.getSetCookie?.() ?? []) {
+    resHeaders.append('set-cookie', sc);
+  }
 
   return new NextResponse(upstream.body, { status: upstream.status, headers: resHeaders });
 }

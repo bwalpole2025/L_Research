@@ -8,6 +8,7 @@ import { api } from '@/lib/api';
 import { dialog } from '@/lib/dialogStore';
 import { saveLastProject } from '@/lib/persist';
 import { loadSession, signOut } from '@/lib/session';
+import { signOut as authSignOut } from '@/lib/authClient';
 import { Wordmark } from '@/components/Wordmark';
 import { BrandIcon } from '@/components/BrandIcon';
 import { ProjectPalette } from '@/components/projects/ProjectPalette';
@@ -139,7 +140,8 @@ export function AppShell({ children }: { children: ReactNode }) {
             data-testid="nav-signout"
             title="Sign out"
             onClick={() => {
-              signOut();
+              void authSignOut(); // clears the HttpOnly session cookie server-side
+              signOut(); // clears the local display profile
               router.push('/');
             }}
             className="flex rounded-lg p-1.5 text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-700 dark:text-[#5d688a] dark:hover:bg-[#10182b] dark:hover:text-[#aab3c8]"

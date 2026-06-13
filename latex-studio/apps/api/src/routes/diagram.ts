@@ -86,8 +86,7 @@ async function upsertProjectFile(
 export async function diagramRoutes(app: FastifyInstance): Promise<void> {
   // ── Frozen PDF export (Stage 2's \includegraphics target) ──
   app.post<{ Params: { id: string } }>('/projects/:id/diagram-pdf', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+    const project = request.project!;
     const parsed = pdfBody.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'Invalid body', details: parsed.error.flatten() });
 
@@ -123,8 +122,7 @@ export async function diagramRoutes(app: FastifyInstance): Promise<void> {
 
   // ── Sandboxed GNUplot ──
   app.post<{ Params: { id: string } }>('/projects/:id/gnuplot', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+    const project = request.project!;
     const parsed = gnuplotBody.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'Invalid body', details: parsed.error.flatten() });
 

@@ -3,14 +3,15 @@
 import { Suspense, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { DEMO_ACCOUNTS, signIn } from '@/lib/session';
+import { signIn, signUp } from '@/lib/authClient';
+import { saveSession } from '@/lib/session';
 import { Wordmark } from '@/components/Wordmark';
 import { BrandIcon } from '@/components/BrandIcon';
 
 /**
- * LOGIN — built to the "LaTeX Studio – Login" design export: brand panel with
- * the set-in-real-time KdV equation on the left, the form on the right.
- * Construction scaffold: local demo accounts only, no real authentication.
+ * LOGIN / SIGN-UP — Better Auth email+password (self-hosted in our Postgres).
+ * On success Better Auth sets an HttpOnly session cookie; we cache only the
+ * non-secret display name locally for the UI chrome.
  */
 
 const field =
@@ -20,18 +21,33 @@ const label = 'block text-[11.5px] tracking-[0.1em] uppercase text-[#6b7693] fon
 function LoginCard() {
   const router = useRouter();
   const params = useSearchParams();
+  const [mode, setMode] = useState<'signin' | 'signup'>('signin');
+  const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
-  const submit = (e: React.FormEvent) => {
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const session = signIn(email, password);
-    if (!session) {
-      setError('Unknown email or wrong password — try a demo account below.');
-      return;
+    setError(null);
+    setBusy(true);
+    try {
+      const result =
+        mode === 'signup'
+          ? await signUp.email({ email: email.trim(), password, name: name.trim() || email.trim() })
+          : await signIn.email({ email: email.trim(), password });
+      if (result.error) {
+        setError(result.error.message ?? (mode === 'signup' ? 'Could not create account.' : 'Wrong email or password.'));
+        return;
+      }
+      saveSession({ email: email.trim(), name: result.data?.user?.name ?? name.trim() });
+      router.push(params.get('next') ?? '/studio');
+    } catch {
+      setError('Something went wrong. Please try again.');
+    } finally {
+      setBusy(false);
     }
-    router.push(params.get('next') ?? '/studio');
   };
 
   return (
@@ -59,16 +75,8 @@ function LoginCard() {
           <p className="mt-[22px] max-w-[400px] text-[15px] leading-[1.65] text-[#8a93a8]">
             A LaTeX studio for researchers who care about how their work reads on the page — not just what it says.
           </p>
-          <div className="mt-[34px] max-w-[420px] rounded-[14px] border border-[#1f2840] bg-[rgba(6,9,18,0.5)] px-6 py-[22px]" style={{ fontFamily: 'var(--ls-serif)' }}>
-            <div className="mb-3 text-xs uppercase tracking-[0.16em] text-[#5d688a]" style={{ fontFamily: "'IBM Plex Sans', sans-serif" }}>
-              Set in real time
-            </div>
-            <div className="text-center text-lg italic leading-normal text-[#d3daea]">
-              η<sub>t</sub> + c η<sub>x</sub> + α η η<sub>x</sub> + β η<sub>xxx</sub> = 0
-            </div>
-          </div>
         </div>
-        <div className="z-10 text-[12.5px] text-[#4d5670]">Runs entirely on your machine · construction build</div>
+        <div className="z-10 text-[12.5px] text-[#4d5670]">Your account · your data · self-hosted</div>
       </div>
 
       {/* ── Form panel ── */}
@@ -80,10 +88,18 @@ function LoginCard() {
             </Link>
           </div>
           <h1 className="mb-2 text-[32px] font-medium text-[#f2f4fa]" style={{ fontFamily: 'var(--ls-serif)' }}>
-            Welcome back
+            {mode === 'signup' ? 'Create your account' : 'Welcome back'}
           </h1>
-          <p className="mb-8 text-[14.5px] text-[#8a93a8]">Sign in to continue to your projects.</p>
+          <p className="mb-8 text-[14.5px] text-[#8a93a8]">
+            {mode === 'signup' ? 'Sign up to start your projects.' : 'Sign in to continue to your projects.'}
+          </p>
 
+          {mode === 'signup' && (
+            <div className="mb-[18px]">
+              <label className={label}>Name</label>
+              <input type="text" value={name} onChange={(e) => setName(e.target.value)} data-testid="login-name" autoComplete="name" placeholder="Ada Lovelace" className={field} />
+            </div>
+          )}
           <div className="mb-[18px]">
             <label className={label}>Email</label>
             <input
@@ -92,7 +108,7 @@ function LoginCard() {
               onChange={(e) => setEmail(e.target.value)}
               data-testid="login-email"
               autoComplete="username"
-              placeholder="you@latexstudio.local"
+              placeholder="you@example.com"
               className={field}
             />
           </div>
@@ -103,7 +119,7 @@ function LoginCard() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               data-testid="login-password"
-              autoComplete="current-password"
+              autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
               placeholder="••••••••"
               className={field}
             />
@@ -117,49 +133,26 @@ function LoginCard() {
 
           <button
             type="submit"
+            disabled={busy}
             data-testid="login-submit"
-            className="mt-2.5 h-12 w-full rounded-[11px] bg-[#4e68f5] text-[15px] font-semibold text-[#ffffff] shadow-[0_8px_24px_rgba(78,104,245,0.30)] transition-colors hover:bg-[#5f78f8]"
+            className="mt-2.5 h-12 w-full rounded-[11px] bg-[#4e68f5] text-[15px] font-semibold text-[#ffffff] shadow-[0_8px_24px_rgba(78,104,245,0.30)] transition-colors hover:bg-[#5f78f8] disabled:opacity-60"
           >
-            Sign in
+            {busy ? 'Please wait…' : mode === 'signup' ? 'Create account' : 'Sign in'}
           </button>
 
-          <div className="my-[26px] flex items-center gap-3.5">
-            <div className="h-px flex-1 bg-[#1c2335]" />
-            <span className="text-xs text-[#5d688a]">or</span>
-            <div className="h-px flex-1 bg-[#1c2335]" />
-          </div>
-
-          <button
-            type="button"
-            onClick={() => setError('ORCID sign-in is not wired up in the construction build — use a demo account below.')}
-            className="flex h-12 w-full items-center justify-center gap-2.5 rounded-[11px] border border-[#2a3247] text-[14.5px] font-medium text-[#c6cde0] transition-colors hover:border-[#3a4866] hover:bg-[#0d1322]"
-          >
-            <span className="flex h-[18px] w-[18px] items-center justify-center rounded-full bg-[#a6ce39] text-[9px] font-bold text-[#1a2a00]">iD</span>
-            Continue with ORCID
-          </button>
-
-          <div className="mt-[30px] border-t border-[#1c2335] pt-5">
-            <p className="text-[11px] uppercase tracking-[0.16em] text-[#5d688a]">Demo accounts · construction</p>
-            <div className="mt-2 flex flex-col gap-1.5">
-              {DEMO_ACCOUNTS.map((a) => (
-                <button
-                  key={a.email}
-                  type="button"
-                  data-testid={`demo-${a.hint}`}
-                  onClick={() => {
-                    setEmail(a.email);
-                    setPassword(a.password);
-                    setError(null);
-                  }}
-                  className="flex items-center justify-between rounded-[9px] border border-[#1c2335] px-3 py-2 text-left text-xs text-[#aab3c8] transition-colors hover:border-[#2a3247] hover:bg-[#0d1322]"
-                >
-                  <span className="font-mono">{a.email}</span>
-                  <span className="text-[#5d688a]">
-                    {a.hint} · pw: {a.password}
-                  </span>
-                </button>
-              ))}
-            </div>
+          <div className="mt-[26px] border-t border-[#1c2335] pt-5 text-center text-[13.5px] text-[#8a93a8]">
+            {mode === 'signup' ? 'Already have an account?' : 'New here?'}{' '}
+            <button
+              type="button"
+              data-testid="login-toggle"
+              onClick={() => {
+                setMode(mode === 'signup' ? 'signin' : 'signup');
+                setError(null);
+              }}
+              className="font-semibold text-[#8fa3ff] hover:text-[#aab9ff]"
+            >
+              {mode === 'signup' ? 'Sign in' : 'Create an account'}
+            </button>
           </div>
         </form>
       </div>

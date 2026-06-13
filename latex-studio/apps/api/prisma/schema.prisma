@@ -39,6 +39,16 @@ model Project {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // Owning user. NULLABLE for now: the app is still single-user behind a static
+  // bearer (no auth provider yet). A null owner = "unowned / legacy", accessible
+  // to the static-bearer principal. Once a real identity provider lands
+  // (Clerk/Auth0/Supabase), backfill this, then make it required and drop the
+  // null-owner allowance in the ownership rule. See docs/decisions.md.
+  // Ownership cascades CONCEPTUALLY to a project's files, snapshots, chat
+  // threads, literature, etc. via their projectId — they have no userId of their
+  // own; the single ownership guard resolves each to its parent project.
+  userId String?
+
   // Which Home folder organises this project; null = root ("Unfiled"). Purely
   // organisational — moving a project changes only this column, never its files.
   folderId String?
@@ -91,6 +101,7 @@ model Project {
   @@index([folderId])
   @@index([archivedAt])
   @@index([deletedAt])
+  @@index([userId])
 }
 
 // Hierarchical folders for BOTH trees (one mechanism). `tree` distinguishes the
@@ -140,8 +151,8 @@ model LiteratureItem {
   source        String    @default("upload")
   addedAt       DateTime  @default(now())
 
-  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  folder  Folder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  project Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  folder  Folder?        @relation(fields: [folderId], references: [id], onDelete: SetNull)
   chunks  LibraryChunk[]
 
   @@index([projectId])
@@ -242,6 +253,10 @@ model TexFile {
   content   String   @default("")
   // "utf8" for text, "base64" for uploaded binary files (figures, fonts, PDFs).
   encoding  String   @default("utf8")
+  // Optimistic-lock counter (review J6): bumped on every content/path update. A
+  // client may pass its last-seen version on a save; a mismatch ⇒ 409 (someone
+  // else saved first). Opt-in today so single-user saves are unchanged.
+  version   Int      @default(0)
   updatedAt DateTime @updatedAt
 
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
@@ -312,4 +327,70 @@ model Credential {
   lastUsedAt   DateTime?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
+}
+
+// ─── Authentication (Better Auth, self-hosted in this Postgres) ───────────────
+// These four tables are Better Auth's core schema (email+password to start;
+// OAuth providers slot into `Account` later without a rewrite). Better Auth owns
+// these rows; the app's per-user ownership lives on Project.userId, which points
+// at User.id (kept a plain column, not a FK, so legacy null/owners migrate
+// cleanly — see auth/principal.ts + docs/decisions.md).
+model User {
+  id            String    @id
+  name          String
+  email         String    @unique
+  emailVerified Boolean   @default(false)
+  image         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  sessions      Session[]
+  accounts      Account[]
+
+  @@map("user")
+}
+
+model Session {
+  id        String   @id
+  expiresAt DateTime
+  token     String   @unique
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@map("session")
+}
+
+model Account {
+  id                    String    @id
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([userId])
+  @@map("account")
+}
+
+model Verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@map("verification")
 }

@@ -15,8 +15,7 @@ const body = z.object({
 export async function pythonCheckRoutes(app: FastifyInstance): Promise<void> {
   // AI + deterministic error check for a single Python file (see pythoncheck/service.ts).
   app.post<{ Params: { id: string } }>('/projects/:id/python-check', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+    const project = request.project!;
 
     const parsed = body.safeParse(request.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'Invalid body', details: parsed.error.flatten() });

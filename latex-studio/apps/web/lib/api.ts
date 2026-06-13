@@ -174,7 +174,10 @@ export const api = {
   stopRun: (projectId: string) => request<{ stopped: boolean }>('POST', `/projects/${projectId}/run/stop`, {}),
   getPyFigures: (projectId: string) => request<{ links: PyFigureLink[] }>('GET', `/projects/${projectId}/pyfigures`),
   /** Same-origin proxied URL for a run artefact (server returns the inner path). */
-  runArtifactUrl: (serverUrl: string) => `/api${serverUrl}`,
+  // Client-side (Pyodide) figures carry a self-contained data:/blob: URL; pass
+  // those through untouched. Server artefacts are API-relative → prefix with /api.
+  runArtifactUrl: (serverUrl: string) =>
+    /^(data:|blob:|https?:)/.test(serverUrl) ? serverUrl : `/api${serverUrl}`,
   /** Copy a run artefact (figure or scratch image) into the project's files (figures/). */
   importRunArtifact: (projectId: string, path: string) => request<FileMeta>('POST', `/projects/${projectId}/run-artifact/import`, { path }),
   /** AI + deterministic error check of one Python file (overrides = live editor buffers). */

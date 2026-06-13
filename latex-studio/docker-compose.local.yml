@@ -1,0 +1,134 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# LOCAL TIER OVERRIDE — single host, PRIVATE, reachable ONLY over your VPN
+# (Tailscale / WireGuard). "Your data never leaves your machine."
+# Layer it on the base compose:
+#
+#   docker compose --env-file .env.local \
+#     -f docker-compose.yml -f docker-compose.local.yml up -d --build
+#
+# This is the SAME codebase + the SAME containers as the hosted tier — only the
+# front door and the auth posture differ (see docs/deployment-tiers.md):
+#   · INGRESS = Caddy, bound to YOUR VPN interface (${TUNNEL_BIND_ADDR}) — never a
+#     public NIC. Nothing is published on the public internet; reach the app only
+#     from inside your tailnet. Confirm with an external port scan (it finds
+#     nothing).
+#   · NO ACCOUNTS — single-user. The service bearer + the VPN are the access
+#     control; AUTH_REQUIRED is OFF (we set API_REQUIRE_STRONG_SECRETS, NOT
+#     DEPLOY_PROFILE=production, so multi-user login stays disabled).
+#
+# Requires Docker Compose ≥ 2.24 (the `!reset` merge tag).
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  # ── Postgres (pgvector). Internal only; data on the named `pgdata` volume. ────
+  postgres:
+    container_name: latex-studio-postgres # stable name for backup/restore
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD (openssl rand -hex 24)}
+    ports: !reset [] # never published — reachable only on the internal network
+
+  mathcheck:
+    ports: !reset []
+
+  # ── TeX Live sandbox HARDENING (identical to the hosted tier). ────────────────
+  texlive:
+    # gVisor (runsc) user-space kernel — see docs/isolation.md. Opt out with
+    # TEXLIVE_RUNTIME=runc if gVisor isn't installed on the host.
+    runtime: "${TEXLIVE_RUNTIME:-runsc}"
+    network_mode: none
+    user: "1000:1000"
+    cpus: "${TEXLIVE_CPUS:-2}"
+    mem_limit: "${TEXLIVE_MEM:-2g}"
+    pids_limit: 512
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: ["ALL"]
+    tmpfs:
+      - /tmp:size=512m
+    depends_on:
+      workspace-init:
+        condition: service_completed_successfully
+
+  pyrun:
+    restart: "no"
+    command: ["true"]
+
+  # ── Fastify api. Internal only; reached only through web's /api proxy. ────────
+  api:
+    container_name: latex-studio-api
+    profiles: !reset [] # run by default (drop the dev-only `full` profile gate)
+    ports: !reset [] # never published — `web` reaches it on the internal network
+    user: "node"
+    group_add:
+      - "${DOCKER_GID:?set DOCKER_GID = $(getent group docker | cut -d: -f3)}"
+    depends_on:
+      workspace-init:
+        condition: service_completed_successfully
+    environment:
+      # Strong-secrets boot guard WITHOUT multi-user auth — this is the single-user
+      # private tier. (Setting DEPLOY_PROFILE=production would turn on AUTH_REQUIRED;
+      # we deliberately don't — see docs/deployment-tiers.md.)
+      API_REQUIRE_STRONG_SECRETS: "1"
+      NODE_ENV: production
+      DATABASE_URL: postgresql://latex:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/latex_studio?schema=public
+      API_BEARER_TOKEN: ${API_BEARER_TOKEN:?set API_BEARER_TOKEN (openssl rand -base64 32)}
+      CONNECTORS_MASTER_KEY: ${CONNECTORS_MASTER_KEY:?set CONNECTORS_MASTER_KEY (openssl rand -base64 32)}
+      # CORS pinned to the VPN hostname you browse to (the api refuses reflect-any
+      # off-loopback). Must match how Caddy serves the app over the tunnel.
+      WEB_BASE_URL: https://${TUNNEL_HOSTNAME:?set TUNNEL_HOSTNAME (your tailnet/VPN hostname)}
+      OAUTH_REDIRECT_BASE_URL: https://${TUNNEL_HOSTNAME}/api
+      PYRUN_WORKSPACE_HOST: ${COMPILE_WORKSPACE:?set COMPILE_WORKSPACE (host path, e.g. /srv/latex-studio/workspace)}
+
+  # ── Next.js app: serves UI + proxies /api with the bearer. Internal only. ─────
+  web:
+    container_name: latex-studio-web
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      API_INTERNAL_URL: http://api:4000
+      API_BEARER_TOKEN: ${API_BEARER_TOKEN:?set API_BEARER_TOKEN}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "node -e \"fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Front door: Caddy, the ONLY published port, bound to the VPN interface. ───
+  caddy:
+    image: caddy:2 # multi-arch (amd64 + arm64)
+    container_name: latex-studio-caddy
+    restart: unless-stopped
+    depends_on:
+      web:
+        condition: service_healthy
+    ports:
+      # host_ip:host_port:container_port — binding to ${TUNNEL_BIND_ADDR} (your
+      # Tailscale 100.x / WireGuard 10.x address) means the listener exists ONLY on
+      # the VPN interface. NEVER use 0.0.0.0 here.
+      - "${TUNNEL_BIND_ADDR:?set TUNNEL_BIND_ADDR to your tailscale/wireguard IP, e.g. 100.x.y.z}:${TUNNEL_PORT:-8443}:8443"
+    environment:
+      TUNNEL_HOSTNAME: ${TUNNEL_HOSTNAME:?set TUNNEL_HOSTNAME (your tailnet/VPN hostname)}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+  # ── One-shot: make the shared workspace writable by the non-root uid 1000. ────
+  workspace-init:
+    image: alpine:3
+    command: ["sh", "-c", "chown -R 1000:1000 /workspace && chmod 0775 /workspace"]
+    restart: "no"
+    volumes:
+      - "${COMPILE_WORKSPACE:?set COMPILE_WORKSPACE}:/workspace"
+
+volumes:
+  caddy_data:
+  caddy_config:

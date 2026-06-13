@@ -698,3 +698,82 @@ from the REAL registry + exporter (file snapshot,
 every fixture through texlive (`templateAcceptance.test.ts`). A catalogue change
 that breaks an export fails CI, not a user's document. The texlive container
 needed `tlmgr install pgfplots tikz-3dplot` (pinned-mirror workflow).
+
+## ADR-016 — Multi-user-READY data model + one ownership guard (auth deferred)
+
+**Status:** accepted (data model + enforcement seam in place; identity provider deferred)
+
+This is the latent-authorization paydown the production review parked. The goal is
+narrow and deliberate: make adding real per-user auth a **small, safe change**
+later instead of a rewrite — **without** building (or hand-rolling) auth now.
+Single-user behaviour behind the static bearer is unchanged today.
+
+### What landed
+
+- **Ownership column, nullable.** `Project.userId` (nullable, indexed). Ownership
+  cascades *conceptually* to a project's files, snapshots, chat threads,
+  literature, compile logs, etc. via their `projectId` — those rows carry **no**
+  `userId`; the guard resolves each to its parent project. A null owner =
+  "unowned / legacy", which today belongs to the static-bearer principal.
+- **Optimistic lock.** `TexFile.version` (review J6), default 0. The file `PATCH`
+  bumps it on every save and, when the client sends its last-seen `version`,
+  rejects a stale write with **409** (opt-in — saves without `version` behave
+  exactly as before). Other write paths (artifact import, connector import) don't
+  yet bump it; full coverage + client wiring is part of the lift below.
+- **One principal.** `request.principal: { userId, kind }` (`src/auth/principal.ts`).
+  Today every request resolves to the single `BEARER_PRINCIPAL` (`userId: null`).
+  `principalOwnsProject()` is the **one** ownership rule; `ownedProjectsWhere()` is
+  its Prisma mirror, so "what I can list" and "what I can act on" never diverge.
+- **One ownership guard, audited.** `plugins/ownership.ts` adds a single global
+  `preHandler` that, for every project-scoped route, resolves the owning project
+  and asserts `principalOwnsProject` — the **single enforcement point**. A
+  `classifyRoute()` table places every route as `public | principal | project`,
+  and an `onRoute` **boot-time audit throws** if any route is unclassified, so a
+  new route cannot silently bypass the guard. Project-scoped routes are resolved
+  three ways: by path param (`/projects/:id/…`), by body field (`/synctex/*`), or
+  by a **child id** (`/files/:id`, `/chat/threads/:tid`, `/library/items/:itemId`,
+  `/library/folders/:folderId`) — the last is the **IDOR fix** (review D): never
+  act on a by-id row without resolving its parent project and checking ownership.
+  Cross-project access returns **404** (not 403) so existence can't be probed.
+- **No scattered checks.** Handlers no longer re-fetch + null-check the project;
+  they read the guard-supplied `request.project!`. The guard is the only place
+  authorization happens.
+
+### Why a null-owner allowance (and not require userId now)
+
+Requiring `userId` would mean inventing a user before there is an identity
+provider. Instead `userId` is nullable and the ownership rule treats null as
+"owned by the bearer holder", so the single-user app is byte-for-byte unchanged
+while every enforcement seam is already in place and tested.
+
+### The remaining auth lift (bearer → user session)
+
+When an identity provider (Clerk / Auth0 / Supabase — **do not hand-roll
+sessions**) is added, the change is intentionally small:
+
+1. **Derive the principal from the session, not the bearer.** Replace the one line
+   in `plugins/ownership.ts` (`request.principal = BEARER_PRINCIPAL`) with logic
+   that verifies the provider's session/JWT (in or just after the existing auth
+   hook) and yields `{ userId, kind: 'user' }`. The bearer can remain for
+   service-to-service calls or be retired. **Nothing else in the routes changes** —
+   they already run behind the guard and read `request.project`.
+2. **Backfill + tighten ownership.** Backfill existing `Project.userId` to their
+   owners, then make the column **required** and **delete the `userId === null`
+   allowance** in `principalOwnsProject` / `ownedProjectsWhere` (the single line).
+   After that, an unowned project is no longer accessible to anyone.
+3. **Promote app-level resources to per-user.** `ProjectFolder` (Home folders) and
+   the connector credential vault are **principal-scoped but carry no userId**
+   today (classified `principal`, shared by the single user). Add `userId` to
+   `ProjectFolder` (and scope `/project-folders` + `/project-trash`) and key the
+   vault per user. These are listed as `principal` routes in `classifyRoute`, so
+   they're easy to find.
+4. **Finish the optimistic lock.** Bump `TexFile.version` on the remaining write
+   paths and have the editor send + honour `version` on save (surface the 409 as a
+   "reload — changed elsewhere" prompt).
+5. **Login UX + token handling** in the web app (provider SDK, protected routes,
+   sign-in/out) — the genuinely new surface, isolated to the frontend + the
+   principal-derivation step in (1).
+
+Items 1–2 are the security-critical core and are a few lines each precisely
+because the guard, the principal, and the ownership rule are already the single
+points of truth.

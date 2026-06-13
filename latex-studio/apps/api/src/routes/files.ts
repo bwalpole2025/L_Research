@@ -13,6 +13,7 @@ function serialiseFile(f: {
   path: string;
   content: string;
   encoding: string;
+  version: number;
   updatedAt: Date;
 }) {
   return {
@@ -21,6 +22,9 @@ function serialiseFile(f: {
     path: f.path,
     content: f.content,
     encoding: f.encoding,
+    // Optimistic-lock counter — a client echoes this back on save to detect a
+    // concurrent edit (see the PATCH route).
+    version: f.version,
     updatedAt: f.updatedAt.toISOString(),
   };
 }
@@ -31,11 +35,15 @@ const createFileBody = z.object({
   encoding: z.enum(['utf8', 'base64']).optional(),
 });
 
-// At least one of path/content must be present on a PATCH.
+// At least one of path/content must be present on a PATCH. `version` is the
+// client's last-seen optimistic-lock counter — OPTIONAL, so existing single-user
+// saves (which don't send it) behave exactly as before; when supplied, a mismatch
+// means someone else saved first and the write is rejected with 409.
 const updateFileBody = z
   .object({
     path: z.string().optional(),
     content: z.string().optional(),
+    version: z.number().int().min(0).optional(),
   })
   .refine((b) => b.path !== undefined || b.content !== undefined, {
     message: 'provide at least one of: path, content',
@@ -55,8 +63,7 @@ export async function fileRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { id: string }; Querystring: { pdf?: string; literature?: string } }>(
     '/projects/:id/export',
     async (request, reply) => {
-      const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-      if (!project) return reply.callNotFound();
+      const project = request.project!;
       const truthy = (v?: string) => v === '1' || v === 'true';
       const wantPdf = truthy(request.query.pdf);
       const wantLit = truthy(request.query.literature);
@@ -129,9 +136,8 @@ export async function fileRoutes(app: FastifyInstance): Promise<void> {
   );
 
   // List a project's files (metadata only — no content — to keep the tree light).
-  app.get<{ Params: { id: string } }>('/projects/:id/files', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+  app.get<{ Params: { id: string } }>('/projects/:id/files', async (request) => {
+    const project = request.project!;
 
     const files = await app.prisma.texFile.findMany({
       where: { projectId: project.id },
@@ -149,8 +155,7 @@ export async function fileRoutes(app: FastifyInstance): Promise<void> {
 
   // Create a file in a project.
   app.post<{ Params: { id: string } }>('/projects/:id/files', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+    const project = request.project!;
 
     const parsed = createFileBody.safeParse(request.body);
     if (!parsed.success) {
@@ -207,7 +212,19 @@ export async function fileRoutes(app: FastifyInstance): Promise<void> {
     const existing = await app.prisma.texFile.findUnique({ where: { id: request.params.id } });
     if (!existing) return reply.callNotFound();
 
-    const data: Prisma.TexFileUpdateInput = {};
+    // Optimistic lock (opt-in): when the client sends its last-seen `version` and
+    // it no longer matches, someone saved first → 409. Without `version`,
+    // behaviour is unchanged (single-user save). Checked against the row we just
+    // read; a single `update` (not updateMany) keeps the content-encryption
+    // middleware able to resolve the projectId for the write.
+    if (parsed.data.version !== undefined && parsed.data.version !== existing.version) {
+      return reply.code(409).send({
+        error: 'This file was changed elsewhere since you opened it — reload to get the latest version.',
+        currentVersion: existing.version,
+      });
+    }
+
+    const data: Prisma.TexFileUpdateInput = { version: { increment: 1 } };
     if (parsed.data.path !== undefined) data.path = parsed.data.path;
     if (parsed.data.content !== undefined) data.content = parsed.data.content;
 

@@ -12,6 +12,7 @@ import { parseLatexLog } from './logParser.js';
 import { parseTexcount } from './texcount.js';
 import { parseSynctexEdit, parseSynctexView } from './synctexParser.js';
 import { CompileQueue } from './queue.js';
+import type { ExecutionGate } from '../exec/gate.js';
 
 export interface CompileInput {
   projectId: string;
@@ -19,6 +20,9 @@ export interface CompileInput {
   files: ProjectFileInput[];
   /** Engine + halt-on-error + draft (from the project's compile settings). */
   options?: CompileOptions;
+  /** Owning principal's key, for the shared execution gate (concurrency caps).
+   *  Compiles do NOT count against the daily RUN quota. */
+  userKey?: string;
 }
 
 const SUPERSEDED: CompileResponse = { status: 'superseded', diagnostics: [], durationMs: 0 };
@@ -31,10 +35,14 @@ export class CompileService {
   constructor(
     private readonly config: AppConfig,
     runner?: TexliveRunner,
+    /** Shared admission gate (global + per-user concurrency). Optional so tests
+     *  and internal callers can construct a service without one. */
+    private readonly gate?: ExecutionGate,
   ) {
     this.runner = runner ?? createRunner(config);
-    // Global cap on concurrent document compiles (per-project serialization is
-    // intrinsic to the queue's per-key design — the per-project throttle).
+    // Per-project serialization + latest-wins coalescing is intrinsic to the
+    // queue's per-key design; the shared gate (if present) adds the cross-path
+    // global + per-user concurrency caps.
     this.queue = new CompileQueue<CompileResponse>(config.compileMaxConcurrent);
   }
 
@@ -90,6 +98,10 @@ export class CompileService {
     const start = Date.now();
     const base = this.base(input.rootFile);
 
+    // Admission gate: global + per-user concurrency (NOT the daily run quota —
+    // compile-on-save must never be rejected). Acquired here, after the queue has
+    // coalesced/superseded, so only compiles that actually run take a slot.
+    const release = this.gate ? await this.gate.acquire(input.userKey ?? 'anon') : null;
     try {
       await this.runner.writeFiles(input.projectId, input.files);
       const result = await this.runner.latexmk(input.projectId, input.rootFile, input.options);
@@ -143,6 +155,8 @@ export class CompileService {
           { severity: 'error', message: `Compilation backend error: ${errorMessage(err)}` },
         ],
       };
+    } finally {
+      release?.();
     }
   }
 

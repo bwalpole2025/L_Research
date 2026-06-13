@@ -134,9 +134,8 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
 
   app.get('/ai/models', async () => getModels(app.config.model));
 
-  app.get<{ Params: { id: string } }>('/projects/:id/ai/logs', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+  app.get<{ Params: { id: string } }>('/projects/:id/ai/logs', async (request) => {
+    const project = request.project!;
     const logs = await app.prisma.aiCallLog.findMany({
       where: { projectId: project.id },
       orderBy: { createdAt: 'desc' },
@@ -155,9 +154,8 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
 
   // ── Chat threads (we own the transcript) ────────────────────────────────────
 
-  app.get<{ Params: { id: string } }>('/projects/:id/chat/threads', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+  app.get<{ Params: { id: string } }>('/projects/:id/chat/threads', async (request) => {
+    const project = request.project!;
     const threads = await app.prisma.chatThread.findMany({
       where: { projectId: project.id },
       orderBy: { updatedAt: 'desc' },
@@ -166,8 +164,7 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.post<{ Params: { id: string } }>('/projects/:id/chat/threads', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+    const project = request.project!;
     const parsed = createThreadBody.safeParse(request.body ?? {});
     const thread = await app.prisma.chatThread.create({
       data: { projectId: project.id, title: parsed.success && parsed.data.title ? parsed.data.title : 'Chat' },
@@ -193,8 +190,7 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
   // ── Chat (streaming SSE) ────────────────────────────────────────────────────
 
   app.post<{ Params: { id: string } }>('/projects/:id/chat', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+    const project = request.project!;
     const parsed = chatBody.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: 'Invalid body', details: parsed.error.flatten() });
@@ -277,8 +273,7 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
   // ── Inline edit (Cmd+K) ─────────────────────────────────────────────────────
 
   app.post<{ Params: { id: string } }>('/projects/:id/edit', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+    const project = request.project!;
     const parsed = editBody.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: 'Invalid body', details: parsed.error.flatten() });
@@ -298,8 +293,7 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
   // ── Fix-from-log ────────────────────────────────────────────────────────────
 
   app.post<{ Params: { id: string } }>('/projects/:id/fix', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+    const project = request.project!;
     const parsed = fixBody.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: 'Invalid body', details: parsed.error.flatten() });

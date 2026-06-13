@@ -249,8 +249,7 @@ function snippetDoc(kind: 'tikz' | 'math', latex: string, macroDefs: string, tik
 
 export async function previewRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Params: { id: string } }>('/projects/:id/render-snippet', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+    const project = request.project!;
     const parsed = renderBody.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'Invalid body', details: parsed.error.flatten() });
 

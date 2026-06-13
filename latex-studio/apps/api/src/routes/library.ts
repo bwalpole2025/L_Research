@@ -123,9 +123,8 @@ export async function libraryRoutes(app: FastifyInstance): Promise<void> {
 
   // ── Tree + lookups ──────────────────────────────────────────────────────────
 
-  app.get<{ Params: { id: string } }>('/projects/:id/library', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+  app.get<{ Params: { id: string } }>('/projects/:id/library', async (request) => {
+    const project = request.project!;
     const [folders, items, trashCount] = await Promise.all([
       app.prisma.folder.findMany({ where: { projectId: project.id, tree: 'literature' }, orderBy: { name: 'asc' } }),
       app.prisma.literatureItem.findMany({ where: { projectId: project.id }, orderBy: { addedAt: 'desc' } }),
@@ -134,15 +133,13 @@ export async function libraryRoutes(app: FastifyInstance): Promise<void> {
     return { folders: folders.map(serializeFolder), items: items.map(serializeItem), trashCount };
   });
 
-  app.get<{ Params: { id: string } }>('/projects/:id/library/cite-keys', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+  app.get<{ Params: { id: string } }>('/projects/:id/library/cite-keys', async (request) => {
+    const project = request.project!;
     return { keys: await bibKeysFor(project.id) };
   });
 
-  app.get<{ Params: { id: string } }>('/projects/:id/library/links', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+  app.get<{ Params: { id: string } }>('/projects/:id/library/links', async (request) => {
+    const project = request.project!;
     const keys = await bibKeysFor(project.id);
     const linked = await app.prisma.literatureItem.findMany({
       where: { projectId: project.id, NOT: { citeKey: null } },
@@ -158,9 +155,8 @@ export async function libraryRoutes(app: FastifyInstance): Promise<void> {
     return { links };
   });
 
-  app.get<{ Params: { id: string }; Querystring: { q?: string } }>('/projects/:id/library/search', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+  app.get<{ Params: { id: string }; Querystring: { q?: string } }>('/projects/:id/library/search', async (request) => {
+    const project = request.project!;
     const q = (request.query.q ?? '').trim();
     if (!q) {
       const all = await app.prisma.literatureItem.findMany({ where: { projectId: project.id }, orderBy: { addedAt: 'desc' } });
@@ -184,8 +180,7 @@ export async function libraryRoutes(app: FastifyInstance): Promise<void> {
   // ── Folders ─────────────────────────────────────────────────────────────────
 
   app.post<{ Params: { id: string } }>('/projects/:id/library/folders', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+    const project = request.project!;
     const parsed = folderBody.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'Invalid body', details: parsed.error.flatten() });
     const parentId = parsed.data.parentId ?? null;
@@ -257,8 +252,7 @@ export async function libraryRoutes(app: FastifyInstance): Promise<void> {
   // ── Items ───────────────────────────────────────────────────────────────────
 
   app.post<{ Params: { id: string } }>('/projects/:id/library/items', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+    const project = request.project!;
     const parsed = uploadBody.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'Invalid body', details: parsed.error.flatten() });
     if (!/\.pdf$/i.test(parsed.data.fileName)) return reply.code(400).send({ error: 'Only PDF files can be added to the library.' });
@@ -290,8 +284,7 @@ export async function libraryRoutes(app: FastifyInstance): Promise<void> {
   // BibTeX + (where the source legally permits) the PDF, extracted + RAG-indexed.
   // Provenance is recorded on `source`. Every fetch is an explicit user action.
   app.post<{ Params: { id: string } }>('/projects/:id/library/from-literature', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+    const project = request.project!;
     const parsed = fromLiteratureBody.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'Invalid body', details: parsed.error.flatten() });
 
@@ -346,8 +339,7 @@ export async function libraryRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.post<{ Params: { id: string } }>('/projects/:id/library/import-bib', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+    const project = request.project!;
     const parsed = importBibBody.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'Invalid body', details: parsed.error.flatten() });
     const entries = [...parseBib(parsed.data.bibContent).values()];
@@ -400,9 +392,8 @@ export async function libraryRoutes(app: FastifyInstance): Promise<void> {
   // ── RAG index (local embeddings over the library) ───────────────────────────
 
   /** Index coverage for Settings: items / extracted / embedded / chunk count. */
-  app.get<{ Params: { id: string } }>('/projects/:id/library/index-status', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+  app.get<{ Params: { id: string } }>('/projects/:id/library/index-status', async (request) => {
+    const project = request.project!;
     const [status, available] = await Promise.all([
       libraryIndexStatus(app.prisma, project.id),
       embeddingAvailable(app.config.mathcheckUrl),
@@ -412,8 +403,7 @@ export async function libraryRoutes(app: FastifyInstance): Promise<void> {
 
   /** Rebuild the whole index (re-extracts PDFs for page provenance). */
   app.post<{ Params: { id: string } }>('/projects/:id/library/reindex', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+    const project = request.project!;
     if (!(await embeddingAvailable(app.config.mathcheckUrl))) {
       return reply.code(503).send({ error: 'embedding model unavailable in mathcheck — see the runbook (one-time model download)' });
     }
@@ -509,9 +499,8 @@ export async function libraryRoutes(app: FastifyInstance): Promise<void> {
 
   // ── Trash ───────────────────────────────────────────────────────────────────
 
-  app.get<{ Params: { id: string } }>('/projects/:id/trash', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+  app.get<{ Params: { id: string } }>('/projects/:id/trash', async (request) => {
+    const project = request.project!;
     const entries = await app.prisma.trashEntry.findMany({ where: { projectId: project.id }, orderBy: { deletedAt: 'desc' } });
     return {
       items: entries.map((e) => {
@@ -595,9 +584,8 @@ export async function libraryRoutes(app: FastifyInstance): Promise<void> {
     return { ok: true };
   });
 
-  app.delete<{ Params: { id: string } }>('/projects/:id/trash', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+  app.delete<{ Params: { id: string } }>('/projects/:id/trash', async (request) => {
+    const project = request.project!;
     const entries = await app.prisma.trashEntry.findMany({ where: { projectId: project.id } });
     // Permanently delete the PDF files on disk for literature/folder entries.
     for (const e of entries) {

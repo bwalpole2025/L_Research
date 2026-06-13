@@ -5,6 +5,7 @@ import { getModels } from '../ai/models.js';
 import { isAcceptableModel } from '../providers/index.js';
 import { DEFAULT_MAIN_TEX } from '../lib/seedTemplate.js';
 import { hardDeleteProject } from '../lib/hardDelete.js';
+import { ownedProjectsWhere } from '../auth/principal.js';
 
 const createProjectBody = z.object({
   name: z.string().trim().min(1).max(200),
@@ -91,12 +92,14 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
   const listQuery = z.object({ view: z.enum(['active', 'archived', 'deleted']).default('active') });
   app.get<{ Querystring: { view?: string } }>('/projects', async (request) => {
     const view = listQuery.safeParse(request.query).data?.view ?? 'active';
-    const where: Prisma.ProjectWhereInput =
+    const lifecycle: Prisma.ProjectWhereInput =
       view === 'archived'
         ? { archivedAt: { not: null }, deletedAt: null }
         : view === 'deleted'
           ? { deletedAt: { not: null } }
           : { archivedAt: null, deletedAt: null };
+    // Only ever list projects the principal owns (today: all, since unowned).
+    const where: Prisma.ProjectWhereInput = { ...lifecycle, ...ownedProjectsWhere(request.principal) };
     const orderBy: Prisma.ProjectOrderByWithRelationInput =
       view === 'deleted' ? { deletedAt: 'desc' } : view === 'archived' ? { archivedAt: 'desc' } : { updatedAt: 'desc' };
     const projects = await app.prisma.project.findMany({ where, orderBy });
@@ -133,8 +136,11 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
 
   // Empty the project Trash (purge ALL soft-deleted projects). Folders have
   // their own trash (/project-trash); this is projects only.
-  app.delete('/projects-trash/purge', async () => {
-    const doomed = await app.prisma.project.findMany({ where: { deletedAt: { not: null } }, select: { id: true } });
+  app.delete('/projects-trash/purge', async (request) => {
+    const doomed = await app.prisma.project.findMany({
+      where: { deletedAt: { not: null }, ...ownedProjectsWhere(request.principal) },
+      select: { id: true },
+    });
     for (const p of doomed) await hardDeleteProject(app, p.id).catch(() => undefined);
     return { ok: true, removed: doomed.length };
   });
@@ -156,6 +162,8 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
         name: parsed.data.name,
         rootFile: 'main.tex',
         folderId,
+        // Stamp the owner. Null today (static bearer); a real user id once auth lands.
+        userId: request.principal.userId,
         files: { create: [{ path: 'main.tex', content: DEFAULT_MAIN_TEX }] },
       },
     });
@@ -163,9 +171,8 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // Fetch one project.
-  app.get<{ Params: { id: string } }>('/projects/:id', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+  app.get<{ Params: { id: string } }>('/projects/:id', async (request) => {
+    const project = request.project!;
     return serialiseProject(project);
   });
 

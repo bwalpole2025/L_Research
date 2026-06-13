@@ -5,6 +5,8 @@ import type { RunArtifact, RunStatus } from '@latex-studio/shared';
 import { api, streamRun } from './api';
 import { useEditorStore } from './store';
 import { useThesisStore } from './thesisStore';
+import { getPythonRuntime } from './python/runtime';
+import { runInBrowser, type BrowserRunFile, type BrowserRunHandlers } from './python/pyodideClient';
 
 /**
  * Python "Run" state: streams a sandboxed execution's stdout/stderr into the
@@ -59,36 +61,72 @@ function append(stream: 'stdout' | 'stderr', text: string): void {
   });
 }
 
-/** Stream one run to completion; resolves when the run ends (done or error). */
+/** Handlers shared by the browser (Pyodide) and server (pyrun) run paths, so the
+ *  output window behaves identically whichever executes. */
+function runHandlers(): BrowserRunHandlers {
+  return {
+    onStart: (s) => useRunStore.setState({ runId: s.runId, script: s.script }),
+    onStdout: (chunk) => append('stdout', chunk),
+    onStderr: (chunk) => append('stderr', chunk),
+    onDone: (d) => {
+      useRunStore.setState({ running: false, status: d.status, exitCode: d.exitCode, durationMs: d.durationMs, figures: d.artifacts });
+      // Server runs auto-import figures/ images into the project — refresh the
+      // Files tab. (Browser figures are kind 'scratch' → added on demand.)
+      if (d.artifacts.some((a) => a.kind === 'figure')) void useEditorStore.getState().refreshFiles();
+    },
+    onError: (message) => {
+      append('stderr', `\n${message}\n`);
+      useRunStore.setState({ running: false, status: 'failed' });
+    },
+  };
+}
+
+/** Pull the project's files for an in-browser run (capped, content included). */
+async function gatherProjectFiles(projectId: string): Promise<BrowserRunFile[]> {
+  const metas = await api.listFiles(projectId);
+  const files: BrowserRunFile[] = [];
+  for (const m of metas) {
+    if (files.length >= 200) break; // sanity cap for the in-memory FS
+    try {
+      const f = await api.getFile(m.id);
+      files.push({ path: f.path, content: f.content, encoding: f.encoding === 'base64' ? 'base64' : 'utf8' });
+    } catch {
+      /* skip a file we can't read; the run may still work */
+    }
+  }
+  return files;
+}
+
+/** Stream one run to completion; resolves when the run ends (done or error).
+ *  Client-side (Pyodide) by default — the host never sees the code. Falls back to
+ *  the sandboxed server run when the runtime is set to 'server' (or no path). */
 function runOnce(body: { path?: string; fileId?: string }): Promise<void> {
   const projectId = useEditorStore.getState().projectId;
   if (!projectId) return Promise.resolve();
 
   controller?.abort();
   controller = new AbortController();
+  const signal = controller.signal;
 
   useRunStore.setState({ running: true, status: 'running', runId: null, script: body.path ?? null, segments: [], exitCode: null, durationMs: null, figures: [] });
   useThesisStore.getState().setBottomTab('python'); // surface the output window
 
-  return streamRun(
-    projectId,
-    body,
-    {
-      onStart: (s) => useRunStore.setState({ runId: s.runId, script: s.script }),
-      onStdout: (chunk) => append('stdout', chunk),
-      onStderr: (chunk) => append('stderr', chunk),
-      onDone: (d) => {
-        useRunStore.setState({ running: false, status: d.status, exitCode: d.exitCode, durationMs: d.durationMs, figures: d.artifacts });
-        // Auto-imported figures/ images are now project files — refresh the Files tab.
-        if (d.artifacts.some((a) => a.kind === 'figure')) void useEditorStore.getState().refreshFiles();
+  const handlers = runHandlers();
+
+  if (getPythonRuntime() === 'client' && body.path) {
+    const script = body.path;
+    return gatherProjectFiles(projectId).then(
+      (files) => {
+        const runId = typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : String(Date.now());
+        return runInBrowser({ runId, script, args: [], files, timeoutMs: 60_000 }, handlers, signal);
       },
-      onError: (message) => {
-        append('stderr', `\n${message}\n`);
-        useRunStore.setState({ running: false, status: 'failed' });
+      () => {
+        handlers.onError('Could not load project files for in-browser Python.');
       },
-    },
-    controller.signal,
-  );
+    );
+  }
+
+  return streamRun(projectId, body, handlers, signal);
 }
 
 export const useRunStore = create<RunState>((set, get) => ({
@@ -130,8 +168,15 @@ export const useRunStore = create<RunState>((set, get) => ({
   async importFigure(path) {
     const projectId = useEditorStore.getState().projectId;
     if (!projectId) return false;
+    const fig = get().figures.find((f) => f.path === path);
     try {
-      await api.importRunArtifact(projectId, path);
+      if (fig && fig.url.startsWith('data:')) {
+        // Browser (Pyodide) figure: upload the captured PNG bytes into the project.
+        const base64 = fig.url.slice(fig.url.indexOf(',') + 1);
+        await useEditorStore.getState().createFile(`figures/${fig.name}`, base64, 'base64');
+      } else {
+        await api.importRunArtifact(projectId, path);
+      }
       await useEditorStore.getState().refreshFiles(); // surface it in the Files tab
       return true;
     } catch {

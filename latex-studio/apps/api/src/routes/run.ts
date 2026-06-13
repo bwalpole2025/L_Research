@@ -15,6 +15,8 @@ import {
   toArtifact,
 } from '../run/artifacts.js';
 import { parsePyFigureLinks } from '../run/pyfigures.js';
+import { QuotaExceededError } from '../exec/gate.js';
+import { principalKey } from '../auth/principal.js';
 
 const runBody = z.object({
   fileId: z.string().optional(),
@@ -63,8 +65,7 @@ export async function runRoutes(app: FastifyInstance): Promise<void> {
   // Execute a project's Python and STREAM stdout/stderr back over SSE. Separate
   // from compilation; runs in the sandbox (see run/runner.ts + ADR-013).
   app.post<{ Params: { id: string } }>('/projects/:id/run', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id } });
-    if (!project) return reply.callNotFound();
+    const project = request.project!;
 
     const parsed = runBody.safeParse(request.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'Invalid body', details: parsed.error.flatten() });
@@ -87,6 +88,19 @@ export async function runRoutes(app: FastifyInstance): Promise<void> {
       select: { path: true, content: true, encoding: true },
     });
     if (!files.some((f) => f.path === scriptPath)) return reply.code(404).send({ error: `No such file: ${scriptPath}` });
+
+    // Admission gate: per-user concurrency + the per-user DAILY RUN quota (the
+    // arbitrary-code / "miner" vector). A quota-exhausted user is rejected with
+    // 429 before any sandbox work starts; over the concurrency cap they wait.
+    let release: (() => void) | null = null;
+    try {
+      release = await app.execGate.acquire(principalKey(request.principal), { countsAsRun: true });
+    } catch (err) {
+      if (err instanceof QuotaExceededError) {
+        return reply.code(429).header('retry-after', String(err.retryAfterSeconds)).send({ error: err.message });
+      }
+      throw err;
+    }
 
     const runId = randomUUID();
     await stageFiles(app.config, project.id, files);
@@ -136,21 +150,20 @@ export async function runRoutes(app: FastifyInstance): Promise<void> {
     } catch (err) {
       sse('done', { status: 'failed', exitCode: null, durationMs: 0, artifacts: [], error: String(err) });
     } finally {
+      release?.(); // free the admission slot for the next queued run
       raw.end();
     }
   });
 
   // Stop the project's running script (kills the process group / container).
-  app.post<{ Params: { id: string } }>('/projects/:id/run/stop', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id }, select: { id: true } });
-    if (!project) return reply.callNotFound();
+  app.post<{ Params: { id: string } }>('/projects/:id/run/stop', async (request) => {
+    const project = request.project!;
     return { stopped: manager.stop(project.id) };
   });
 
   // Serve a run artefact (figure or scratch image) from the workspace.
   app.get<{ Params: { id: string }; Querystring: { path?: string } }>('/projects/:id/run-artifact', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id }, select: { id: true } });
-    if (!project) return reply.callNotFound();
+    const project = request.project!;
     const rel = request.query.path ?? '';
     // Only the run's own output areas are servable; reject traversal.
     if (!isArtifactPath(rel)) {
@@ -165,8 +178,7 @@ export async function runRoutes(app: FastifyInstance): Promise<void> {
   // from LaTeX via \includegraphics. Figures already live in figures/ (idempotent);
   // scratch images (e.g. captured plt.show() output) are copied there.
   app.post<{ Params: { id: string }; Body: { path?: string } }>('/projects/:id/run-artifact/import', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id }, select: { id: true } });
-    if (!project) return reply.callNotFound();
+    const project = request.project!;
     const parsed = importBody.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'Invalid body', details: parsed.error.flatten() });
     const rel = parsed.data.path;
@@ -193,9 +205,8 @@ export async function runRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // The `% !py <script> -> <output>` figure links across the project's .tex files.
-  app.get<{ Params: { id: string } }>('/projects/:id/pyfigures', async (request, reply) => {
-    const project = await app.prisma.project.findUnique({ where: { id: request.params.id }, select: { id: true } });
-    if (!project) return reply.callNotFound();
+  app.get<{ Params: { id: string } }>('/projects/:id/pyfigures', async (request) => {
+    const project = request.project!;
     const texFiles = await app.prisma.texFile.findMany({
       where: { projectId: project.id, path: { endsWith: '.tex' } },
       select: { content: true },
