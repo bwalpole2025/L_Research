@@ -272,7 +272,7 @@ function FilesIndex() {
               onDeleteFolder={deleteFolder}
               onDrop={onDrop}
             />
-            <div className="mt-2 space-y-0.5 border-t border-[var(--ls-line)] pt-2">
+            <div className="mt-4 space-y-1.5 border-t border-[var(--ls-line)] pt-4">
               <SpecialEntry icon={Archive} label="Archived" count={archived.length} active={view === 'archived'} testid="view-archived" onClick={openArchived} />
               <SpecialEntry icon={Trash2} label="Trash" count={trashCount} active={view === 'trash'} testid="view-trash" onClick={openTrash} />
             </div>
@@ -520,20 +520,26 @@ function ProjectRow({
         onClick={onOpen}
         className="flex cursor-pointer items-center gap-3 px-5 py-[15px] transition-colors hover:bg-[var(--ls-surface-muted)]"
       >
-        {/* Name + root-file pill: both shrink/truncate so they never overflow into
-            the owner/actions, even when the project list is narrow. */}
-        <div className="flex min-w-0 flex-1 items-center gap-2.5 overflow-hidden">
-          <span className="min-w-0 shrink truncate text-[15px] font-medium text-[var(--ls-text)]" style={{ fontFamily: 'var(--ls-serif)' }}>
+        {/* The NAME gets its own line and the full column width, so it stays
+            readable; the root-file + compile status drop to a quieter subtitle line
+            rather than competing with the name for horizontal space. */}
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[15px] font-medium text-[var(--ls-text)]" style={{ fontFamily: 'var(--ls-serif)' }} title={project.name}>
             {project.name}
-          </span>
-          <span className="inline-flex min-w-0 shrink items-center gap-[7px] overflow-hidden rounded-[7px] border border-[var(--ls-line)] bg-[var(--ls-surface-muted)] py-1 pl-[9px] pr-2.5">
-            <span className="h-[7px] w-[7px] flex-none rounded-full" style={{ background: color }} />
-            <span className="truncate text-[12.5px] text-[var(--ls-muted)]">{project.rootFile}</span>
-          </span>
-          <CompileBadge projectId={project.id} />
+          </div>
+          <div className="mt-1.5 flex items-center gap-2 overflow-hidden">
+            <span
+              className="inline-flex min-w-0 max-w-full items-center gap-[7px] overflow-hidden rounded-[7px] border border-[var(--ls-line)] bg-[var(--ls-surface-muted)] py-0.5 pl-[9px] pr-2.5"
+              title={project.rootFile}
+            >
+              <span className="h-[7px] w-[7px] flex-none rounded-full" style={{ background: color }} />
+              <span className="truncate text-[12px] text-[var(--ls-muted)]">{project.rootFile}</span>
+            </span>
+            <CompileBadge projectId={project.id} />
+            {/* Owner kept as a tiny footnote — the title is the focus, not who owns it. */}
+            <span className="hidden flex-none truncate text-[10.5px] text-[var(--ls-muted)] opacity-70 sm:inline">· {owner}</span>
+          </div>
         </div>
-        {/* Owner is secondary — hide it when there isn't room (narrow windows). */}
-        <span className="hidden w-[130px] flex-none truncate text-[13.5px] text-[var(--ls-muted)] lg:block">{owner}</span>
         <div className="flex flex-none items-center justify-end gap-1.5">
           <IconAction icon={MoveRight} label="Move to folder" onClick={onToggleMenu} />
           <IconAction icon={Archive} label="Archive" onClick={onArchive} />
@@ -610,10 +616,10 @@ function SearchResults({ results, owner: _owner, onOpen }: { results: Array<{ pr
           onClick={() => onOpen(project.id)}
           className="flex w-full items-center justify-between gap-4 border-b border-[var(--ls-line)] px-5 py-[15px] text-left transition-colors last:border-0 hover:bg-[var(--ls-surface-muted)]"
         >
-          <span className="min-w-0 truncate text-[15px] font-medium text-[var(--ls-text)]" style={{ fontFamily: 'var(--ls-serif)' }}>
+          <span className="min-w-0 flex-1 truncate text-[15px] font-medium text-[var(--ls-text)]" style={{ fontFamily: 'var(--ls-serif)' }} title={project.name}>
             {project.name}
           </span>
-          <span className="flex-none truncate text-[12.5px] text-[var(--ls-muted)]">{path}</span>
+          <span className="max-w-[45%] flex-none truncate text-[12.5px] text-[var(--ls-muted)]" title={path}>{path}</span>
         </button>
       ))}
     </div>
