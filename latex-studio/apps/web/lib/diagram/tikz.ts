@@ -111,15 +111,18 @@ function edgeLine(e: EdgeElement, names: Map<string, string>, colors: ColorTable
   return `  \\draw${opt(optsStr)} ${end(e.from)} ${connector} ${end(e.to)}${label};`;
 }
 
-function templateLines(el: TemplateElement, ctx: TemplateCtx): string[] {
+function templateLines(el: TemplateElement, ctx: TemplateCtx, colors: ColorTable): string[] {
   const t = getTemplate(el.templateId);
   if (!t) return [`  % unknown template "${el.templateId}"`];
+  // Closed-shape templates honour the user's fill — resolve it to a \definecolor'd
+  // name (registers it in the prelude) and hand it down on the ctx.
+  const tctx: TemplateCtx = el.style.fill ? { ...ctx, fill: colors.resolve(el.style.fill) } : ctx;
   // Templates emit code around their own local origin; a shift-scope places
   // them, so the template code stays clean and composable.
   return [
     `  % template: ${t.name}`,
     `  \\begin{scope}[shift={(${X(el.x)},${Y(el.y)})}]`,
-    ...t.exportLatex(el.params, ctx).map((l) => `    ${l}`),
+    ...t.exportLatex(el.params, tctx).map((l) => `    ${l}`),
     `  \\end{scope}`,
   ];
 }
@@ -167,7 +170,7 @@ function elementLines(el: DiagramElement, names: Map<string, string>, colors: Co
       ];
     }
     case 'template':
-      return templateLines(el, ctx);
+      return templateLines(el, ctx, colors);
   }
 }
 

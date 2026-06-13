@@ -65,6 +65,23 @@ describe('gnuplot labels + axes show in the editor previews (live)', () => {
     expect((r.json() as { pngBase64: string }).pngBase64.length).toBeGreaterThan(500);
   }, 180000);
 
+  it('a 3D surface compiles live (splot) and produces a labelled preview', async () => {
+    const r = await app.inject({
+      method: 'POST', url: `/projects/${projectId}/gnuplot`, headers: auth,
+      payload: {
+        source: { type: 'function', expr: 'sin(sqrt(x^2+y^2))' },
+        settings: { dim: '3d', xrange: '[-5:5]', yrange: '[-5:5]', xlabel: '$x$', ylabel: '$y$', zlabel: '$z$', plotStyle: 'lines', view: '60,30' },
+        widthCm: 8, heightCm: 6, base: 'surf3d',
+      },
+    });
+    expect(r.statusCode).toBe(200);
+    const body = r.json() as { ok: boolean; stderr: string; previewPng?: string };
+    expect(body.ok, body.stderr).toBe(true);
+    expect((body.previewPng ?? '').length).toBeGreaterThan(1000);
+    const snip = await snippet('surf3d');
+    expect(snip.statusCode, snip.body.slice(0, 600)).toBe(200);
+  }, 180000);
+
   it('a restyle regenerates the plot and the variant busts the stale preview cache', async () => {
     // Same base, new colour → new .pdf on disk; same TikZ text.
     await run('lblplot', { stroke: '#e8443d', strokeWidth: 3, dash: 'dashed' });

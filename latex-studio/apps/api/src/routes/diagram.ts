@@ -44,11 +44,15 @@ const gnuplotBody = z.object({
     z.object({ type: z.literal('data'), data: z.string().min(1).max(200_000) }),
   ]),
   settings: z.object({
+    dim: z.enum(['2d', '3d']).optional(),
     xrange: z.string().max(60).default(''),
     yrange: z.string().max(60).default(''),
+    zrange: z.string().max(60).optional(),
     xlabel: z.string().max(200).default(''),
     ylabel: z.string().max(200).default(''),
+    zlabel: z.string().max(200).optional(),
     plotStyle: z.string().max(20).default('lines'),
+    view: z.string().max(40).optional(),
   }),
   // The element's stroke colour/width/dash, so the curve renders in the chosen style.
   style: z

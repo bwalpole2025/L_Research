@@ -118,7 +118,22 @@ export interface PlotElement extends ElementBase {
   w: number;
   h: number;
   source: { type: 'function'; expr: string } | { type: 'data'; data: string };
-  settings: { xrange: string; yrange: string; xlabel: string; ylabel: string; plotStyle: 'lines' | 'points' | 'linespoints' };
+  settings: {
+    /** '2d' (gnuplot `plot`, default) or '3d' surface (`splot`, f(x,y)). */
+    dim?: '2d' | '3d';
+    xrange: string;
+    yrange: string;
+    /** 3D only. */
+    zrange?: string;
+    xlabel: string;
+    ylabel: string;
+    /** 3D only. */
+    zlabel?: string;
+    /** 'pm3d' is a 3D-only coloured surface. */
+    plotStyle: 'lines' | 'points' | 'linespoints' | 'pm3d';
+    /** 3D view as "rotx,rotz" (gnuplot `set view`), e.g. "60,30". */
+    view?: string;
+  };
   /** Project-relative basename of generated output (diagrams/plots/<base>.*). */
   generatedBase?: string;
   /** Data-URL PNG preview of the generated plot (canvas display only). */

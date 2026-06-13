@@ -272,7 +272,7 @@ export const api = {
     projectId: string,
     body: {
       source: { type: 'function'; expr: string } | { type: 'data'; data: string };
-      settings: { xrange: string; yrange: string; xlabel: string; ylabel: string; plotStyle: string };
+      settings: { dim?: '2d' | '3d'; xrange: string; yrange: string; zrange?: string; xlabel: string; ylabel: string; zlabel?: string; plotStyle: string; view?: string };
       style?: { stroke?: string; strokeWidth?: number; dash?: string };
       widthCm: number;
       heightCm: number;

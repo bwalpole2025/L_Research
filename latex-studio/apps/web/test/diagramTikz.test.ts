@@ -76,6 +76,34 @@ describe('scene → TikZ export', () => {
     expect(picture).toContain('opaque');
   });
 
+  it('closed-shape templates honour the Style→Fill colour (circle/ellipse/polygon/sector)', () => {
+    const tpl = (id: string, fill: string, params: Record<string, number | string | boolean> = {}) =>
+      ({ id: `t-${id}`, kind: 'template', templateId: id, x: 0, y: 0, params, style: { ...DEFAULT_STYLE, fill } }) as const;
+
+    // A user fill on circle/ellipse/polygon → a \definecolor'd fill= on the \draw.
+    const filled = sceneToTikz({ ...emptyScene(), elements: [
+      tpl('circle', '#aabbcc', { r: 1.5, label: '$r$', showRadius: false }),
+      tpl('ellipse', '#aabbcc', { a: 2, b: 1.2 }),
+      tpl('regular-polygon', '#aabbcc', { sides: '5', r: 1.5 }),
+    ] }).code;
+    expect(filled).toContain('{HTML}{AABBCC}');
+    expect(filled).toMatch(/\\draw\[fill=lsColor\d\] \(0,0\) circle/);
+    expect(filled).toMatch(/\\draw\[fill=lsColor\d\] \(0,0\) ellipse/);
+    expect(filled).toMatch(/\\draw\[fill=lsColor\d\] .*-- cycle;/);
+
+    // No user fill → the shapes stay unfilled (no fill= option), unchanged behaviour.
+    const bare = sceneToTikz({ ...emptyScene(), elements: [tpl('circle', '', { r: 1, label: '', showRadius: false })] }).code;
+    expect(bare).toContain('\\draw (0,0) circle');
+    expect(bare).not.toMatch(/fill=/);
+
+    // A sector defaults to its blue tint, but a user fill overrides it.
+    const sectorDefault = sceneToTikz({ ...emptyScene(), elements: [tpl('arc-sector', '', { r: 1.5, from: 0, to: 60, sector: true })] }).code;
+    expect(sectorDefault).toContain('fill=blue!15');
+    const sectorUser = sceneToTikz({ ...emptyScene(), elements: [tpl('arc-sector', '#aabbcc', { r: 1.5, from: 0, to: 60, sector: true })] }).code;
+    expect(sectorUser).toMatch(/fill=lsColor\d/);
+    expect(sectorUser).not.toContain('fill=blue!15');
+  });
+
   it('export path + \\input snippet', () => {
     expect(tikzExportPath('figs/wave.diagram.json')).toBe('diagrams/wave.tikz');
     expect(inputSnippet('wave.diagram.json')).toBe('\\input{diagrams/wave.tikz}');

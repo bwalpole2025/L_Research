@@ -1044,7 +1044,7 @@ function ElementView({ el, scene, selected, draft }: { el: DiagramElement; scene
       );
     case 'template': {
       const t = getTemplate(el.templateId);
-      const ctx: TemplateCtx = { view3d: scene.view3d, scale: 40 };
+      const ctx: TemplateCtx = { view3d: scene.view3d, scale: 40, fill: s.fill };
       return (
         <g style={sel} data-testid="dtemplate" transform={`translate(${el.x},${el.y})`} opacity={draft ? 0.6 : s.opacity}>
           {t ? (
@@ -1231,11 +1231,23 @@ function SidePanel(props: SidePanelProps) {
             </select>
           </Field>
           <Field label="Fill">
-            <span className="flex items-center gap-1">
-              <input type="color" value={s.fill || '#ffffff'} onChange={(e) => updateStyle({ fill: e.target.value })} className="h-5 w-8" />
-              <button type="button" className="text-[10px] text-[var(--ls-muted)] underline" onClick={() => updateStyle({ fill: '' })}>
-                none
-              </button>
+            <span className="flex items-center gap-1.5">
+              <input
+                type="checkbox"
+                data-testid="dstyle-fill-on"
+                checked={!!s.fill}
+                onChange={(e) => updateStyle({ fill: e.target.checked ? s.fill || '#93c5fd' : '' })}
+                title={s.fill ? 'Filled — uncheck for no fill' : 'No fill — check to fill'}
+              />
+              <input
+                type="color"
+                data-testid="dstyle-fill"
+                value={s.fill || '#93c5fd'}
+                disabled={!s.fill}
+                onChange={(e) => updateStyle({ fill: e.target.value })}
+                className="h-5 w-8 disabled:opacity-30"
+              />
+              <span className="text-[10px] text-[var(--ls-muted)]">{s.fill || 'none'}</span>
             </span>
           </Field>
           <Field label="Opacity">
@@ -1492,12 +1504,43 @@ function TemplateFields({ el, updateSelected }: { el: TemplateElement; updateSel
 function PlotFields({ el, updateSelected }: { el: PlotElement; updateSelected: (patch: (e: DiagramElement) => DiagramElement) => void }) {
   const setSrc = (src: PlotElement['source']) => updateSelected((e) => ({ ...e, source: src }) as DiagramElement);
   const setSet = (patch: Partial<PlotElement['settings']>) => updateSelected((e) => ({ ...e, settings: { ...(e as PlotElement).settings, ...patch } }) as DiagramElement);
+  const is3d = el.settings.dim === '3d';
+
+  // Toggling dimension also swaps a sensible default expression and a style
+  // valid for that dimension (pm3d exists only in 3D) — in one history step.
+  const setDim = (dim: '2d' | '3d') =>
+    updateSelected((e) => {
+      const pe = e as PlotElement;
+      const settings = { ...pe.settings, dim };
+      let source = pe.source;
+      if (dim === '3d') {
+        if (pe.settings.plotStyle !== 'pm3d' && pe.settings.plotStyle !== 'points') settings.plotStyle = 'lines';
+        if (source.type === 'function' && !/\by\b/.test(source.expr)) source = { type: 'function', expr: 'sin(sqrt(x**2+y**2))' };
+      } else {
+        if (pe.settings.plotStyle === 'pm3d') settings.plotStyle = 'lines';
+        if (source.type === 'function' && /\by\b/.test(source.expr)) source = { type: 'function', expr: 'sin(x)/x' };
+      }
+      return { ...pe, settings, source } as DiagramElement;
+    });
+
   return (
     <div className="space-y-1.5 border-t border-[var(--ls-line)] pt-1.5" data-testid="dplot-fields">
+      <Field label="Type">
+        <select data-testid="dplot-dim" value={el.settings.dim ?? '2d'} onChange={(e) => setDim(e.target.value as '2d' | '3d')} className={`${numInput} w-24`}>
+          <option value="2d">2D plot</option>
+          <option value="3d">3D surface</option>
+        </select>
+      </Field>
       <Field label="Source">
         <select
           value={el.source.type}
-          onChange={(e) => setSrc(e.target.value === 'function' ? { type: 'function', expr: 'sin(x)/x' } : { type: 'data', data: '0 0\n1 1\n2 4\n' })}
+          onChange={(e) =>
+            setSrc(
+              e.target.value === 'function'
+                ? { type: 'function', expr: is3d ? 'sin(sqrt(x**2+y**2))' : 'sin(x)/x' }
+                : { type: 'data', data: is3d ? '0 0 0\n1 0 1\n0 1 1\n1 1 2\n' : '0 0\n1 1\n2 4\n' },
+            )
+          }
           className={`${numInput} w-20`}
         >
           <option value="function">function</option>
@@ -1505,9 +1548,9 @@ function PlotFields({ el, updateSelected }: { el: PlotElement; updateSelected: (
         </select>
       </Field>
       {el.source.type === 'function' ? (
-        <input data-testid="dplot-expr" value={el.source.expr} onChange={(e) => setSrc({ type: 'function', expr: e.target.value })} className={`${textInput} font-mono text-[11px]`} placeholder="sin(x)/x" />
+        <input data-testid="dplot-expr" value={el.source.expr} onChange={(e) => setSrc({ type: 'function', expr: e.target.value })} className={`${textInput} font-mono text-[11px]`} placeholder={is3d ? 'f(x,y) e.g. sin(sqrt(x^2+y^2))' : 'sin(x)/x'} />
       ) : (
-        <textarea value={el.source.data} onChange={(e) => setSrc({ type: 'data', data: e.target.value })} rows={3} className={`${textInput} resize-y font-mono text-[11px]`} placeholder="x y per line" />
+        <textarea value={el.source.data} onChange={(e) => setSrc({ type: 'data', data: e.target.value })} rows={3} className={`${textInput} resize-y font-mono text-[11px]`} placeholder={is3d ? 'x y z per line' : 'x y per line'} />
       )}
       <Field label="x range">
         <input value={el.settings.xrange} onChange={(e) => setSet({ xrange: e.target.value })} className={`${numInput} w-24 text-left`} placeholder="[-10:10]" />
@@ -1515,17 +1558,42 @@ function PlotFields({ el, updateSelected }: { el: PlotElement; updateSelected: (
       <Field label="y range">
         <input value={el.settings.yrange} onChange={(e) => setSet({ yrange: e.target.value })} className={`${numInput} w-24 text-left`} placeholder="[] = auto" />
       </Field>
+      {is3d && (
+        <Field label="z range">
+          <input data-testid="dplot-zrange" value={el.settings.zrange ?? ''} onChange={(e) => setSet({ zrange: e.target.value })} className={`${numInput} w-24 text-left`} placeholder="[] = auto" />
+        </Field>
+      )}
       <Field label="x label">
         <input value={el.settings.xlabel} onChange={(e) => setSet({ xlabel: e.target.value })} className={`${numInput} w-24 text-left`} />
       </Field>
       <Field label="y label">
         <input value={el.settings.ylabel} onChange={(e) => setSet({ ylabel: e.target.value })} className={`${numInput} w-24 text-left`} />
       </Field>
+      {is3d && (
+        <>
+          <Field label="z label">
+            <input data-testid="dplot-zlabel" value={el.settings.zlabel ?? ''} onChange={(e) => setSet({ zlabel: e.target.value })} className={`${numInput} w-24 text-left`} />
+          </Field>
+          <Field label="view rot,rot">
+            <input data-testid="dplot-view" value={el.settings.view ?? ''} onChange={(e) => setSet({ view: e.target.value })} className={`${numInput} w-24 text-left`} placeholder="60,30" />
+          </Field>
+        </>
+      )}
       <Field label="Style">
-        <select value={el.settings.plotStyle} onChange={(e) => setSet({ plotStyle: e.target.value as PlotElement['settings']['plotStyle'] })} className={`${numInput} w-24`}>
-          <option value="lines">lines</option>
-          <option value="points">points</option>
-          <option value="linespoints">linespoints</option>
+        <select data-testid="dplot-style" value={el.settings.plotStyle} onChange={(e) => setSet({ plotStyle: e.target.value as PlotElement['settings']['plotStyle'] })} className={`${numInput} w-24`}>
+          {is3d ? (
+            <>
+              <option value="lines">surface (mesh)</option>
+              <option value="pm3d">surface (colour)</option>
+              <option value="points">points</option>
+            </>
+          ) : (
+            <>
+              <option value="lines">lines</option>
+              <option value="points">points</option>
+              <option value="linespoints">linespoints</option>
+            </>
+          )}
         </select>
       </Field>
     </div>

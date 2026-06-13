@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
-import { buildGnuplotPlan, gnuplotScript, toGnuplotExpr } from '../src/run/gnuplot.js';
+import { buildGnuplotPlan, gnuplotScript, sanitizeView, toGnuplotExpr } from '../src/run/gnuplot.js';
 
 const TOKEN = 'test-token';
 const auth = { authorization: `Bearer ${TOKEN}` };
@@ -106,6 +106,41 @@ describe('gnuplot script generation (cairolatex — LaTeX-native fonts)', () => 
       dataRel: '.gpout/r/data.dat',
     });
     expect(s).toContain("plot '.gpout/r/data.dat' with points notitle");
+  });
+
+  it('3D surfaces use splot with view/hidden3d (mesh) or pm3d (colour), z range + label', () => {
+    const mesh = gnuplotScript({
+      source: { type: 'function', expr: 'sin(sqrt(x^2+y^2))' },
+      settings: { dim: '3d', xrange: '[-5:5]', yrange: '[-5:5]', zrange: '[-1:1]', xlabel: '$x$', ylabel: '$y$', zlabel: '$z$', plotStyle: 'lines', view: '60,30' },
+      style: { stroke: '#4e68f5', strokeWidth: 2 },
+      widthCm: 8,
+      heightCm: 6,
+      outBase: 'diagrams/plots/s1',
+    });
+    expect(mesh).toContain('set view 60,30');
+    expect(mesh).toContain('set hidden3d');
+    expect(mesh).toContain('set zlabel');
+    expect(mesh).toContain('set zrange [-1:1]');
+    expect(mesh).toContain("splot sin(sqrt(x**2+y**2)) with lines lc rgb '#4e68f5' lw 2.0 dt 1 notitle");
+    expect(mesh).not.toContain('set pm3d');
+
+    const colour = gnuplotScript({
+      source: { type: 'function', expr: 'x*exp(-x^2-y^2)' },
+      settings: { dim: '3d', xrange: '', yrange: '', xlabel: '', ylabel: '', plotStyle: 'pm3d' },
+      widthCm: 8,
+      heightCm: 6,
+      outBase: 'diagrams/plots/s2',
+    });
+    expect(colour).toContain('set pm3d');
+    expect(colour).toContain('splot x*exp(-x**2-y**2) with pm3d notitle'); // palette, no line colour
+    expect(colour).not.toContain('set hidden3d');
+  });
+
+  it('the 3D view string is validated/clamped (never injected raw)', () => {
+    expect(sanitizeView('60,30')).toBe('60,30');
+    expect(sanitizeView('200,400')).toBe('180,360'); // clamped
+    expect(sanitizeView('garbage; set output "/etc/x"')).toBe('60,30'); // rejected → default
+    expect(sanitizeView(undefined)).toBe('60,30');
   });
 });
 

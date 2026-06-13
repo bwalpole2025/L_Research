@@ -8,6 +8,8 @@ import React from 'react';
 import {
   bool,
   defaults,
+  fillOpt,
+  fillOr,
   fmt,
   num,
   pgfView,
@@ -447,11 +449,11 @@ const circleT: DiagramTemplate = {
   ],
   requiredPackages: [],
   size: (p) => ({ w: num(p, 'r') * 2 * S + 20, h: num(p, 'r') * 2 * S + 20 }),
-  renderCanvas(p) {
+  renderCanvas(p, ctx) {
     const r = num(p, 'r') * S;
     return (
       <g>
-        <circle cx={0} cy={0} r={r} fill="none" stroke={INK} strokeWidth={1.4} />
+        <circle cx={0} cy={0} r={r} fill={fillOr(ctx, 'none')} stroke={INK} strokeWidth={1.4} />
         <circle cx={0} cy={0} r={2.2} fill={INK} />
         {bool(p, 'showRadius') && (
           <>
@@ -462,9 +464,9 @@ const circleT: DiagramTemplate = {
       </g>
     );
   },
-  exportLatex(p) {
+  exportLatex(p, ctx) {
     const r = fmt(num(p, 'r'));
-    const out = [`\\draw (0,0) circle (${r});`, `\\fill (0,0) circle (0.04);`];
+    const out = [`\\draw${fillOpt(ctx)} (0,0) circle (${r});`, `\\fill (0,0) circle (0.04);`];
     if (bool(p, 'showRadius')) out.push(`\\draw (0,0) -- (34:${r}) node[midway, above, sloped] {${str(p, 'label')}};`);
     return out;
   },
@@ -481,8 +483,8 @@ const ellipseT: DiagramTemplate = {
   ],
   requiredPackages: [],
   size: (p) => ({ w: num(p, 'a') * 2 * S + 20, h: num(p, 'b') * 2 * S + 20 }),
-  renderCanvas: (p) => <ellipse cx={0} cy={0} rx={num(p, 'a') * S} ry={num(p, 'b') * S} fill="none" stroke={INK} strokeWidth={1.4} />,
-  exportLatex: (p) => [`\\draw (0,0) ellipse (${fmt(num(p, 'a'))} and ${fmt(num(p, 'b'))});`],
+  renderCanvas: (p, ctx) => <ellipse cx={0} cy={0} rx={num(p, 'a') * S} ry={num(p, 'b') * S} fill={fillOr(ctx, 'none')} stroke={INK} strokeWidth={1.4} />,
+  exportLatex: (p, ctx) => [`\\draw${fillOpt(ctx)} (0,0) ellipse (${fmt(num(p, 'a'))} and ${fmt(num(p, 'b'))});`],
 };
 
 const arcSector: DiagramTemplate = {
@@ -498,7 +500,7 @@ const arcSector: DiagramTemplate = {
   ],
   requiredPackages: [],
   size: (p) => ({ w: num(p, 'r') * 2 * S + 20, h: num(p, 'r') * 2 * S + 20 }),
-  renderCanvas(p) {
+  renderCanvas(p, ctx) {
     const r = num(p, 'r') * S;
     const a0 = (-num(p, 'from') * Math.PI) / 180;
     const a1 = (-num(p, 'to') * Math.PI) / 180;
@@ -508,14 +510,14 @@ const arcSector: DiagramTemplate = {
     const d = bool(p, 'sector')
       ? `M0,0 L${p0.x},${p0.y} A${r},${r} 0 ${large} 0 ${p1.x},${p1.y} Z`
       : `M${p0.x},${p0.y} A${r},${r} 0 ${large} 0 ${p1.x},${p1.y}`;
-    return <path d={d} fill={bool(p, 'sector') ? 'rgba(78,104,245,0.15)' : 'none'} stroke={INK} strokeWidth={1.4} />;
+    return <path d={d} fill={bool(p, 'sector') ? fillOr(ctx, 'rgba(78,104,245,0.15)') : 'none'} stroke={INK} strokeWidth={1.4} />;
   },
-  exportLatex(p) {
+  exportLatex(p, ctx) {
     const r = fmt(num(p, 'r'));
     const a0 = fmt(num(p, 'from'));
     const a1 = fmt(num(p, 'to'));
     return bool(p, 'sector')
-      ? [`\\draw[fill=blue!15] (0,0) -- (${a0}:${r}) arc (${a0}:${a1}:${r}) -- cycle;`]
+      ? [`\\draw[fill=${fillOr(ctx, 'blue!15')}] (0,0) -- (${a0}:${r}) arc (${a0}:${a1}:${r}) -- cycle;`]
       : [`\\draw (${a0}:${r}) arc (${a0}:${a1}:${r});`];
   },
 };
@@ -567,23 +569,23 @@ const regularPolygon: DiagramTemplate = {
   ],
   requiredPackages: [],
   size: (p) => ({ w: num(p, 'r') * 2 * S + 16, h: num(p, 'r') * 2 * S + 16 }),
-  renderCanvas(p) {
+  renderCanvas(p, ctx) {
     const n = Number(str(p, 'sides'));
     const r = num(p, 'r') * S;
     const pts = Array.from({ length: n }, (_, i) => {
       const a = (i * 2 * Math.PI) / n - Math.PI / 2;
       return `${r * Math.cos(a)},${r * Math.sin(a)}`;
     }).join(' ');
-    return <polygon points={pts} fill="none" stroke={INK} strokeWidth={1.4} />;
+    return <polygon points={pts} fill={fillOr(ctx, 'none')} stroke={INK} strokeWidth={1.4} />;
   },
-  exportLatex(p) {
+  exportLatex(p, ctx) {
     const n = Number(str(p, 'sides'));
     const r = num(p, 'r');
     const pts = Array.from({ length: n }, (_, i) => {
       const a = (i * 360) / n + 90;
       return `(${fmt(a)}:${fmt(r)})`;
     });
-    return [`\\draw ${pts.join(' -- ')} -- cycle;`];
+    return [`\\draw${fillOpt(ctx)} ${pts.join(' -- ')} -- cycle;`];
   },
 };
 

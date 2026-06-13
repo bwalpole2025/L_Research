@@ -91,9 +91,32 @@ function plotLineOptions(style: PlotStyle | undefined, plotStyle: string): strin
   return parts.join(' ');
 }
 
+/** Validate a 3D view ("rotx,rotz") to two clamped numbers — never let the
+ *  raw string into `set view`. Defaults to gnuplot's classic 60,30. */
+export function sanitizeView(v: string | undefined): string {
+  const m = /^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/.exec(v ?? '');
+  if (!m) return '60,30';
+  const rotx = Math.max(0, Math.min(180, Number.parseFloat(m[1]!)));
+  const rotz = Math.max(0, Math.min(360, Number.parseFloat(m[2]!)));
+  return `${rotx},${rotz}`;
+}
+
+export interface GnuplotSettings {
+  /** '2d' (gnuplot `plot`, default) or '3d' surface (`splot`, f(x,y)). */
+  dim?: '2d' | '3d' | undefined;
+  xrange: string;
+  yrange: string;
+  zrange?: string | undefined;
+  xlabel: string;
+  ylabel: string;
+  zlabel?: string | undefined;
+  plotStyle: string;
+  view?: string | undefined;
+}
+
 export function gnuplotScript(opts: {
   source: { type: 'function'; expr: string } | { type: 'data'; data: string };
-  settings: { xrange: string; yrange: string; xlabel: string; ylabel: string; plotStyle: string };
+  settings: GnuplotSettings;
   widthCm: number;
   heightCm: number;
   outBase: string; // e.g. diagrams/plots/plot-1
@@ -101,6 +124,7 @@ export function gnuplotScript(opts: {
   style?: PlotStyle; // the element's stroke colour/width/dash
 }): string {
   const { source, settings } = opts;
+  const is3d = settings.dim === '3d';
   const esc = (t: string) => t.replace(/['\\]/g, '');
   const lines = [
     `set terminal cairolatex pdf size ${opts.widthCm.toFixed(2)}cm,${opts.heightCm.toFixed(2)}cm`,
@@ -111,6 +135,26 @@ export function gnuplotScript(opts: {
   if (settings.xrange && settings.xrange !== '[]') lines.push(`set xrange ${settings.xrange}`);
   if (settings.yrange && settings.yrange !== '[]') lines.push(`set yrange ${settings.yrange}`);
   lines.push('set grid');
+
+  if (is3d) {
+    // 3D surface via splot f(x,y). pm3d = a colour-mapped surface (palette, so
+    // no line colour); otherwise a hidden-line mesh in the element's stroke.
+    if (settings.zlabel) lines.push(`set zlabel '${esc(settings.zlabel)}'`);
+    if (settings.zrange && settings.zrange !== '[]') lines.push(`set zrange ${settings.zrange}`);
+    lines.push(`set view ${sanitizeView(settings.view)}`);
+    lines.push('set ticslevel 0');
+    lines.push('set isosamples 40,40');
+    lines.push('set samples 40,40');
+    const pm3d = settings.plotStyle === 'pm3d';
+    lines.push(pm3d ? 'set pm3d' : 'set hidden3d');
+    const sstyle = pm3d ? 'pm3d' : settings.plotStyle === 'points' ? 'points' : 'lines';
+    const lineOpts = pm3d ? '' : plotLineOptions(opts.style, sstyle);
+    const withClause = `with ${sstyle}${lineOpts ? ` ${lineOpts}` : ''} notitle`;
+    lines.push(source.type === 'function' ? `splot ${toGnuplotExpr(source.expr)} ${withClause}` : `splot '${opts.dataRel}' ${withClause}`);
+    lines.push('unset output');
+    return lines.join('\n') + '\n';
+  }
+
   const style = ['lines', 'points', 'linespoints'].includes(settings.plotStyle) ? settings.plotStyle : 'lines';
   const lineOpts = plotLineOptions(opts.style, style);
   const withClause = `with ${style}${lineOpts ? ` ${lineOpts}` : ''} notitle`;

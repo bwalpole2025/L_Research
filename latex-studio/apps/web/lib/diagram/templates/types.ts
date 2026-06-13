@@ -43,7 +43,20 @@ export interface TemplateCtx {
   view3d: View3D;
   /** Canvas px per TikZ cm (40). */
   scale: number;
+  /** The element's user-set fill, so closed-shape templates (circle, ellipse,
+   *  sector, polygon) can honour the Style→Fill control. Carries the form each
+   *  call site needs: a CSS hex in renderCanvas, a resolved TikZ colour name in
+   *  exportLatex. Empty/undefined ⇒ the template keeps its own default fill. */
+  fill?: string;
 }
+
+/** TikZ `[fill=…]` draw option for a user fill — '' when there's no user fill,
+ *  so a template that defaults to no fill stays unfilled. */
+export const fillOpt = (ctx: TemplateCtx): string => (ctx.fill ? `[fill=${ctx.fill}]` : '');
+
+/** Fill colour for a template that has a default (e.g. a shaded sector): the
+ *  user's fill if set, otherwise the supplied fallback. */
+export const fillOr = (ctx: TemplateCtx, fallback: string): string => ctx.fill || fallback;
 
 /** Required preamble entries. Plain names are packages (`pgfplots`,
  *  `tikz-3dplot`); `lib:<name>` entries are \usetikzlibrary names. */
