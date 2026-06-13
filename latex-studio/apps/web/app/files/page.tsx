@@ -6,6 +6,7 @@ import { FolderPlus, Plus, Trash2, RotateCcw, MoveRight, FolderInput } from 'luc
 import type { Project, ProjectFolder, TrashItem } from '@latex-studio/shared';
 import { api, ApiError } from '@/lib/api';
 import { saveLastProject, loadProjectFolderUi, saveProjectFolderUi } from '@/lib/persist';
+import { dialog } from '@/lib/dialogStore';
 import { AppShell, PageHeader, ShellSearch, TAG_COLORS } from '@/components/AppNav';
 import { RequireSession } from '@/components/RequireSession';
 import { loadSession } from '@/lib/session';
@@ -88,8 +89,8 @@ function FilesIndex() {
       return next;
     });
 
-  const createFolder = (parentId: string | null) => {
-    const name = window.prompt('Folder name')?.trim();
+  const createFolder = async (parentId: string | null) => {
+    const name = (await dialog.prompt({ title: 'New folder', placeholder: 'folder name' }))?.trim();
     if (!name) return;
     void run(
       () => api.createProjectFolder(name, parentId),
@@ -99,9 +100,15 @@ function FilesIndex() {
     );
   };
   const renameFolder = (id: string, name: string) => void run(() => api.updateProjectFolder(id, { name }));
-  const deleteFolder = (id: string) => {
+  const deleteFolder = async (id: string) => {
     const f = folderById(folders, id);
-    if (!window.confirm(`Move folder “${f?.name ?? 'folder'}” and its subfolders to trash? Projects inside move to the root.`)) return;
+    const ok = await dialog.confirm({
+      title: 'Delete folder',
+      message: `Move folder “${f?.name ?? 'folder'}” and its subfolders to trash? Projects inside move to the root.`,
+      confirmLabel: 'Move to trash',
+      destructive: true,
+    });
+    if (!ok) return;
     const fallback = f?.parentId ?? null;
     const affected = descendantIds(folders, id);
     void run(
@@ -122,8 +129,8 @@ function FilesIndex() {
   };
 
   // ── Project operations ──────────────────────────────────────────────────────
-  const createProject = () => {
-    const name = window.prompt('Name the new project:')?.trim();
+  const createProject = async () => {
+    const name = (await dialog.prompt({ title: 'New project', placeholder: 'project name' }))?.trim();
     if (!name) return;
     void api
       .createProject(name, selectedId)
@@ -242,7 +249,7 @@ function FilesIndex() {
               <div className="flex flex-none items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => createFolder(selectedId)}
+                  onClick={() => void createFolder(selectedId)}
                   className="inline-flex items-center gap-1.5 rounded-[9px] border border-[var(--ls-line)] px-3 py-1.5 text-[13px] text-[var(--ls-muted)] transition-colors hover:bg-[var(--ls-surface-muted)] hover:text-[var(--ls-text)]"
                 >
                   <FolderPlus className="h-3.5 w-3.5" /> New folder
@@ -250,7 +257,7 @@ function FilesIndex() {
                 <button
                   type="button"
                   data-testid="new-project-here"
-                  onClick={createProject}
+                  onClick={() => void createProject()}
                   className="inline-flex items-center gap-1.5 rounded-[9px] bg-[var(--ls-brand)] px-3.5 py-1.5 text-[13px] font-semibold text-white transition-colors hover:opacity-90"
                 >
                   <Plus className="h-3.5 w-3.5" /> New project
@@ -296,7 +303,7 @@ function FilesIndex() {
                       <p className="text-[14px] text-[var(--ls-muted)]">No projects here yet — create one.</p>
                       <button
                         type="button"
-                        onClick={createProject}
+                        onClick={() => void createProject()}
                         className="inline-flex items-center gap-1.5 rounded-[9px] bg-[var(--ls-brand)] px-3.5 py-1.5 text-[13px] font-semibold text-white transition-colors hover:opacity-90"
                       >
                         <Plus className="h-3.5 w-3.5" /> New project

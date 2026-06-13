@@ -68,9 +68,48 @@ async function mockApi(page: Page, cap: Captured) {
 async function openDiagram(page: Page) {
   await page.goto('/studio');
   await expect(page.locator('.cm-content')).toBeVisible();
+  // A .diagram.json never opens as a JSON pane — clicking it routes to the
+  // full-page maths diagram editor.
   await page.getByTestId('file-wave.diagram.json').click();
+  await page.waitForURL(/\/math-diagram/);
   await expect(page.getByTestId('tikz-diagram-editor')).toBeVisible();
 }
+
+test('a .diagram.json never opens as a JSON pane: clicking it routes to the full-page editor', async ({ page }) => {
+  const cap: Captured = { writes: [], gnuplotCalls: 0 };
+  await mockApi(page, cap);
+  await page.goto('/studio');
+  await expect(page.locator('.cm-content')).toBeVisible();
+
+  // Clicking the diagram file navigates away from the studio pane to its own page —
+  // it is never rendered as an embedded JSON pane in the studio.
+  await page.getByTestId('file-wave.diagram.json').click();
+  await page.waitForURL(/\/math-diagram/);
+  await expect(page).toHaveURL(/file=wave\.diagram\.json/);
+  await expect(page.getByTestId('tikz-diagram-editor')).toBeVisible();
+});
+
+test('if a diagram tab is active in the studio, the pane shows a card (not the embedded editor) linking to its page', async ({ page }) => {
+  const cap: Captured = { writes: [], gnuplotCalls: 0 };
+  await mockApi(page, cap);
+  // Prime the saved layout so the diagram is the active tab when the studio loads.
+  await page.addInitScript(() => {
+    window.localStorage.setItem(
+      'latex-studio:layout:p1',
+      JSON.stringify({ openFileIds: ['f1', 'f9'], activeFileId: 'f9', cursors: {} }),
+    );
+  });
+  await page.goto('/studio');
+
+  // The editor pane shows the card, never the embedded TikZ editor.
+  await expect(page.getByTestId('open-diagram-page')).toBeVisible();
+  await expect(page.getByTestId('tikz-diagram-editor')).toHaveCount(0);
+
+  // The card's button opens the full-page editor.
+  await page.getByTestId('open-diagram-page').click();
+  await page.waitForURL(/\/math-diagram/);
+  await expect(page.getByTestId('tikz-diagram-editor')).toBeVisible();
+});
 
 test('flowchart: nodes with maths labels render via KaTeX, edge anchors + reflows, clean TikZ exports', async ({ page }) => {
   const cap: Captured = { writes: [], gnuplotCalls: 0 };

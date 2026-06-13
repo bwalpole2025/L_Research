@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
+import { AppDialog } from '@/components/AppDialog';
 import '@fontsource/jetbrains-mono/400.css';
 import '@fontsource/jetbrains-mono/500.css';
 import '@fontsource/jetbrains-mono/700.css';
@@ -36,6 +37,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       </head>
       <body className="bg-[var(--ls-bg)] text-zinc-950 antialiased dark:text-zinc-100">
         {children}
+        <AppDialog />
       </body>
     </html>
   );

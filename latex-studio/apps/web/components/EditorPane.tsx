@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useMemo } from 'react';
-import { Code2, Eye } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { Code2, Eye, Shapes } from 'lucide-react';
 import { useEditorStore } from '@/lib/store';
 import { useAiStore } from '@/lib/aiStore';
 import { useRunStore } from '@/lib/runStore';
@@ -11,8 +12,38 @@ import { EditorTabs } from './EditorTabs';
 import { CodeEditor } from './editor/CodeEditor';
 import { VisualView } from './editor/VisualView';
 import { BinaryFilePreview } from './editor/BinaryFilePreview';
-import { TikzDiagramEditor } from './diagram/TikzDiagramEditor';
 import { isDiagramPath } from '../lib/diagram/model';
+
+/** Maths diagrams are never edited as JSON in the editor pane — they open in
+ *  their own full-page editor. This card stands in when a `.diagram.json` file
+ *  is the active tab (e.g. after returning from that page). */
+function DiagramFileCard({ path }: { path: string }) {
+  const router = useRouter();
+  const projectId = useEditorStore((s) => s.projectId);
+  const name = path.split('/').pop() ?? path;
+  const href = `/math-diagram?project=${projectId ?? ''}&file=${encodeURIComponent(path)}`;
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
+      <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-[#4e68f5]/12 text-[#4e68f5]">
+        <Shapes className="h-7 w-7" />
+      </div>
+      <div className="space-y-1">
+        <h2 className="text-base font-semibold text-[var(--ls-text)]">{name}</h2>
+        <p className="max-w-sm text-sm text-[var(--ls-muted)]">
+          Maths diagrams open in their own full-page editor — not as a JSON file in this pane.
+        </p>
+      </div>
+      <button
+        type="button"
+        data-testid="open-diagram-page"
+        onClick={() => router.push(href)}
+        className="rounded-lg bg-[#4e68f5] px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-[#5f78f8]"
+      >
+        Open maths diagram editor
+      </button>
+    </div>
+  );
+}
 
 export function EditorPane() {
   const activeFileId = useEditorStore((s) => s.activeFileId);
@@ -110,8 +141,8 @@ export function EditorPane() {
         )}
       </div>
       <div className="min-h-0 flex-1">
-        {activePath && activeFileId && isDiagramPath(activePath) ? (
-          <TikzDiagramEditor fileId={activeFileId} path={activePath} content={contents[activeFileId] ?? ''} embedded />
+        {activePath && isDiagramPath(activePath) ? (
+          <DiagramFileCard path={activePath} />
         ) : isBinary && activePath ? (
           <BinaryFilePreview path={activePath} base64={activeFileId ? contents[activeFileId] : undefined} />
         ) : showVisual && activeFileId ? (

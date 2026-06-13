@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   Shapes,
   ChevronDown,
@@ -23,10 +24,11 @@ import { useThesisStore } from '@/lib/thesisStore';
 import { ApiError } from '@/lib/api';
 import { ALL_EXTENSIONS, isBinaryPath, isPythonPath } from '@/lib/fileKind';
 import { itemsFromDataTransfer, itemsFromFileList } from '@/lib/dropUpload';
-import { basename, buildTree, parentPath, type TreeNode } from '@/lib/treeUtils';
+import { basename, buildTree, parentPath, type TreeFileNode, type TreeNode } from '@/lib/treeUtils';
+import { dialog } from '@/lib/dialogStore';
 
 function reportError(err: unknown): void {
-  window.alert(err instanceof ApiError ? err.message : 'Something went wrong');
+  void dialog.alert({ title: 'Couldn’t complete that', message: err instanceof ApiError ? err.message : 'Something went wrong.' });
 }
 
 interface IconButtonProps {
@@ -53,9 +55,11 @@ function IconButton({ icon: Icon, label, onClick }: IconButtonProps) {
 }
 
 export function FileTree() {
+  const router = useRouter();
   const files = useEditorStore((s) => s.files);
   const folders = useEditorStore((s) => s.folders);
   const activeFileId = useEditorStore((s) => s.activeFileId);
+  const projectId = useEditorStore((s) => s.projectId);
   const uploadFiles = useEditorStore((s) => s.uploadFiles);
   const unverifiedByFile = useThesisStore((s) => s.auditReport?.byFile ?? {});
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -80,7 +84,7 @@ export function FileTree() {
       if (skipped > 0) notes.push(`${skipped} unsupported file(s) skipped.`);
       if (errors.length > 0) notes.push(`Errors:\n${errors.join('\n')}`);
       if (notes.length > 0) {
-        window.alert(`Uploaded ${uploaded} file(s).\n\n${notes.join('\n\n')}`);
+        void dialog.alert({ title: `Uploaded ${uploaded} file(s)`, message: notes.join('\n\n') });
       }
     },
     [uploadFiles],
@@ -118,6 +122,19 @@ export function FileTree() {
     [runUpload],
   );
   const openFile = useEditorStore((s) => s.openFile);
+  // Maths diagrams (.diagram.json) are not edited as JSON in an editor pane —
+  // they open in their own full-page editor. Other files open in the pane.
+  const openNode = useCallback(
+    (node: TreeFileNode) => {
+      if (node.path.toLowerCase().endsWith('.diagram.json')) {
+        const q = `project=${projectId ?? ''}&file=${encodeURIComponent(node.path)}`;
+        router.push(`/math-diagram?${q}`);
+        return;
+      }
+      void openFile(node.id);
+    },
+    [openFile, router, projectId],
+  );
   const createFile = useEditorStore((s) => s.createFile);
   const createFolder = useEditorStore((s) => s.createFolder);
   const renameFile = useEditorStore((s) => s.renameFile);
@@ -147,9 +164,9 @@ export function FileTree() {
 
   const newFile = useCallback(
     async (folder: string, presetName?: string) => {
-      const name = presetName ?? window.prompt(`New file in ${folder || 'root'} (e.g. chapter.tex)`);
-      if (!name?.trim()) return;
-      const path = folder ? `${folder}/${name.trim()}` : name.trim();
+      const name = (presetName ?? (await dialog.prompt({ title: `New file in ${folder || 'root'}`, placeholder: 'e.g. chapter.tex' })))?.trim();
+      if (!name) return;
+      const path = folder ? `${folder}/${name}` : name;
       try {
         await createFile(path);
       } catch (err) {
@@ -160,38 +177,38 @@ export function FileTree() {
   );
 
   const newFolder = useCallback(
-    (folder: string) => {
-      const name = window.prompt(`New folder in ${folder || 'root'}`);
-      if (!name?.trim()) return;
-      createFolder(folder ? `${folder}/${name.trim()}` : name.trim());
+    async (folder: string) => {
+      const name = (await dialog.prompt({ title: `New folder in ${folder || 'root'}`, placeholder: 'folder name' }))?.trim();
+      if (!name) return;
+      createFolder(folder ? `${folder}/${name}` : name);
     },
     [createFolder],
   );
 
   const doRenameFile = async (id: string, path: string) => {
-    const name = window.prompt('Rename file', basename(path));
-    if (!name?.trim()) return;
+    const name = (await dialog.prompt({ title: 'Rename file', defaultValue: basename(path) }))?.trim();
+    if (!name) return;
     const parent = parentPath(path);
     try {
-      await renameFile(id, parent ? `${parent}/${name.trim()}` : name.trim());
+      await renameFile(id, parent ? `${parent}/${name}` : name);
     } catch (err) {
       reportError(err);
     }
   };
 
   const doRenameFolder = async (path: string) => {
-    const name = window.prompt('Rename folder', basename(path));
-    if (!name?.trim()) return;
+    const name = (await dialog.prompt({ title: 'Rename folder', defaultValue: basename(path) }))?.trim();
+    if (!name) return;
     const parent = parentPath(path);
     try {
-      await renameFolder(path, parent ? `${parent}/${name.trim()}` : name.trim());
+      await renameFolder(path, parent ? `${parent}/${name}` : name);
     } catch (err) {
       reportError(err);
     }
   };
 
   const doDeleteFile = async (id: string, path: string) => {
-    if (!window.confirm(`Delete ${path}?`)) return;
+    if (!(await dialog.confirm({ title: 'Delete file', message: `Delete ${path}?`, confirmLabel: 'Delete', destructive: true }))) return;
     try {
       await deleteFile(id);
     } catch (err) {
@@ -200,7 +217,7 @@ export function FileTree() {
   };
 
   const doDeleteFolder = async (path: string) => {
-    if (!window.confirm(`Delete folder "${path}" and all files inside it?`)) return;
+    if (!(await dialog.confirm({ title: 'Delete folder', message: `Delete folder “${path}” and all files inside it?`, confirmLabel: 'Delete', destructive: true }))) return;
     try {
       await deleteFolder(path);
     } catch (err) {
@@ -246,7 +263,7 @@ export function FileTree() {
                 <IconButton icon={FilePlus} label="New file" onClick={() => void newFile(node.path)} />
                 <IconButton icon={Upload} label="Upload files here" onClick={() => triggerUpload(node.path)} />
                 <IconButton icon={FolderUp} label="Upload folder here" onClick={() => triggerFolderUpload(node.path)} />
-                <IconButton icon={FolderPlus} label="New folder" onClick={() => newFolder(node.path)} />
+                <IconButton icon={FolderPlus} label="New folder" onClick={() => void newFolder(node.path)} />
                 <IconButton icon={Pencil} label="Rename folder" onClick={() => void doRenameFolder(node.path)} />
                 <IconButton icon={Trash2} label="Delete folder" onClick={() => void doDeleteFolder(node.path)} />
               </div>
@@ -281,7 +298,7 @@ export function FileTree() {
           <span
             className="flex-1 cursor-pointer truncate"
             data-testid={`file-${node.path}`}
-            onClick={() => void openFile(node.id)}
+            onClick={() => openNode(node)}
           >
             {node.name}
           </span>
@@ -320,15 +337,22 @@ export function FileTree() {
           <IconButton icon={FilePlus} label="New file" onClick={() => void newFile('')} />
           <IconButton
             icon={Shapes}
-            label="New TikZ diagram"
+            label="New maths diagram"
             onClick={() => {
-              const name = window.prompt('New diagram name (e.g. setup)');
-              if (name?.trim()) void newFile('', `${name.trim().replace(/\.diagram\.json$/i, '')}.diagram.json`);
+              void dialog.prompt({ title: 'New maths diagram', placeholder: 'e.g. setup' }).then((raw) => {
+                const name = raw?.trim();
+                if (!name) return;
+                const path = `${name.replace(/\.diagram\.json$/i, '')}.diagram.json`;
+                // Create it, then open the full-page diagram editor (never inline).
+                void createFile(path, '').then((file) => {
+                  if (file) router.push(`/math-diagram?project=${projectId ?? ''}&file=${encodeURIComponent(file.path)}`);
+                });
+              });
             }}
           />
           <IconButton icon={Upload} label="Upload files" onClick={() => triggerUpload('')} />
           <IconButton icon={FolderUp} label="Upload folder" onClick={() => triggerFolderUpload('')} />
-          <IconButton icon={FolderPlus} label="New folder" onClick={() => newFolder('')} />
+          <IconButton icon={FolderPlus} label="New folder" onClick={() => void newFolder('')} />
         </div>
       </div>
       <input

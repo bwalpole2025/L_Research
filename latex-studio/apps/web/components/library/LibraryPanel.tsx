@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { BookText, ChevronDown, ChevronRight, FolderPlus, Pencil, Search, Sparkles, Trash2, Upload } from 'lucide-react';
 import { useEditorStore } from '@/lib/store';
 import { useLibraryStore } from '@/lib/libraryStore';
+import { dialog } from '@/lib/dialogStore';
 import type { LibraryFolder, LiteratureItem } from '@/lib/types';
 
 function LinkBadge({ item }: { item: LiteratureItem }) {
@@ -82,7 +83,7 @@ function ItemRow({ item }: { item: LiteratureItem }) {
         <button type="button" aria-label="Edit metadata" onClick={() => select(editing ? null : item.id)} className="text-zinc-400 opacity-0 hover:text-zinc-700 group-hover:opacity-100 dark:hover:text-zinc-200">
           <Pencil className="h-3 w-3" />
         </button>
-        <button type="button" aria-label="Delete" onClick={() => { if (window.confirm(`Move “${item.title || item.fileName}” to trash?`)) void deleteItem(item.id); }} className="text-zinc-400 opacity-0 hover:text-red-600 group-hover:opacity-100">
+        <button type="button" aria-label="Delete" onClick={() => void dialog.confirm({ title: 'Move to trash', message: `Move “${item.title || item.fileName}” to trash?`, confirmLabel: 'Move to trash', destructive: true }).then((ok) => { if (ok) void deleteItem(item.id); })} className="text-zinc-400 opacity-0 hover:text-red-600 group-hover:opacity-100">
           <Trash2 className="h-3 w-3" />
         </button>
       </div>
@@ -121,13 +122,13 @@ function FolderNode({ folder, depth }: { folder: LibraryFolder; depth: number })
           {folder.name}
         </span>
         <div className="hidden items-center gap-0.5 group-hover:flex">
-          <button type="button" aria-label="New subfolder" onClick={() => { const n = window.prompt('Folder name'); if (n) void createFolder(n, folder.id); }} className="text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200">
+          <button type="button" aria-label="New subfolder" onClick={() => void dialog.prompt({ title: 'New subfolder', placeholder: 'folder name' }).then((n) => { const v = n?.trim(); if (v) void createFolder(v, folder.id); })} className="text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200">
             <FolderPlus className="h-3 w-3" />
           </button>
-          <button type="button" aria-label="Rename folder" onClick={() => { const n = window.prompt('Rename folder', folder.name); if (n) void renameFolder(folder.id, n); }} className="text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200">
+          <button type="button" aria-label="Rename folder" onClick={() => void dialog.prompt({ title: 'Rename folder', defaultValue: folder.name }).then((n) => { const v = n?.trim(); if (v) void renameFolder(folder.id, v); })} className="text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200">
             <Pencil className="h-3 w-3" />
           </button>
-          <button type="button" aria-label="Delete folder" onClick={() => { if (window.confirm(`Move folder “${folder.name}” and its articles to trash?`)) void deleteFolder(folder.id); }} className="text-zinc-400 hover:text-red-600">
+          <button type="button" aria-label="Delete folder" onClick={() => void dialog.confirm({ title: 'Move folder to trash', message: `Move folder “${folder.name}” and its articles to trash?`, confirmLabel: 'Move to trash', destructive: true }).then((ok) => { if (ok) void deleteFolder(folder.id); })} className="text-zinc-400 hover:text-red-600">
             <Trash2 className="h-3 w-3" />
           </button>
         </div>
@@ -171,7 +172,7 @@ export function LibraryPanel() {
     <div className="flex h-full flex-col bg-[var(--ls-surface)]" data-testid="library-panel">
       <div className="flex h-10 items-center gap-1 border-b border-zinc-200 bg-[var(--ls-surface-muted)] px-2 text-xs dark:border-zinc-800">
         <span className="font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Library</span>
-        <button type="button" aria-label="New folder" data-testid="lib-new-folder" onClick={() => { const n = window.prompt('Folder name'); if (n) void createFolder(n, null); }} className="ml-auto rounded p-1 text-zinc-500 hover:bg-zinc-200 dark:hover:bg-zinc-700">
+        <button type="button" aria-label="New folder" data-testid="lib-new-folder" onClick={() => void dialog.prompt({ title: 'New folder', placeholder: 'folder name' }).then((n) => { const v = n?.trim(); if (v) void createFolder(v, null); })} className="ml-auto rounded p-1 text-zinc-500 hover:bg-zinc-200 dark:hover:bg-zinc-700">
           <FolderPlus className="h-3.5 w-3.5" />
         </button>
         <button type="button" aria-label="Upload PDF" data-testid="lib-upload" onClick={() => fileInput.current?.click()} className="rounded p-1 text-zinc-500 hover:bg-zinc-200 dark:hover:bg-zinc-700">

@@ -66,11 +66,12 @@ test('palette insert → param + 3D view edits re-render → export offers exact
   await mockApi(page, cap);
   await page.goto('/studio');
   await expect(page.locator('.cm-content')).toBeVisible();
+  // The diagram opens in its own full-page editor, not as a JSON pane.
   await page.getByTestId('file-wave.diagram.json').click();
+  await page.waitForURL(/\/math-diagram/);
   await expect(page.getByTestId('tikz-diagram-editor')).toBeVisible();
 
-  // Palette: categories + search, thumbnails are clickable inserts.
-  await page.getByTestId('dtool-template').click();
+  // Palette: open by default on the full page; categories + search, thumbnails insert.
   await expect(page.getByTestId('dpalette')).toBeVisible();
   await page.getByTestId('dpalette-search').fill('sphere');
   await page.getByTestId('dpalette-item-sphere').click();
@@ -102,9 +103,10 @@ test('palette insert → param + 3D view edits re-render → export offers exact
   expect(written?.content).toContain('\\tdplotsetmaincoords{60}{110}');
   expect(written?.content).toContain('% requires in the preamble:');
 
-  // The root buffer got the accepted line (visible when main.tex is reopened).
-  await page.getByTestId('file-main.tex').click();
-  await expect(page.locator('.cm-content')).toContainText('\\usepackage{tikz-3dplot}');
+  // The accepted line landed in the root file (autosaved back to main.tex).
+  await expect
+    .poll(() => cap.writes.some((w) => w.content?.includes('\\usepackage{tikz-3dplot}')), { timeout: 5000 })
+    .toBe(true);
 });
 
 test('a template needing nothing exports with NO preamble offer', async ({ page }) => {
@@ -113,9 +115,10 @@ test('a template needing nothing exports with NO preamble offer', async ({ page 
   await page.goto('/studio');
   await expect(page.locator('.cm-content')).toBeVisible();
   await page.getByTestId('file-wave.diagram.json').click();
+  await page.waitForURL(/\/math-diagram/);
   await expect(page.getByTestId('tikz-diagram-editor')).toBeVisible();
 
-  await page.getByTestId('dtool-template').click();
+  await expect(page.getByTestId('dpalette')).toBeVisible();
   await page.getByTestId('dpalette-search').fill('venn');
   await page.getByTestId('dpalette-item-venn-2').click();
   await expect(page.locator('[data-testid="dtemplate"]')).toHaveCount(1);
