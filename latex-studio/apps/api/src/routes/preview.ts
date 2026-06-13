@@ -199,18 +199,27 @@ function snippetDoc(kind: 'tikz' | 'math', latex: string, macroDefs: string, tik
       .filter(Boolean)
       .join('\n');
   }
-  // Maths: preview-class page cropped to the formula. Labels/numbering markers
-  // are meaningless in a standalone snippet and send latexmk into a rerun loop.
+  // Maths: preview-class page cropped to the formula. Labels are meaningless in a
+  // standalone snippet and send latexmk into a rerun loop, so they're stripped.
   // DISPLAY maths is typeset as $\displaystyle …$ (aligned for & rows), NOT as a
   // display environment: \[…\] occupies the FULL line width, so the PNG would be
   // mostly centring whitespace and the client could not size the glyphs to the
   // text. A content-tight box keeps display-style glyphs at a knowable scale.
+  //
+  // EXCEPTION — equation TAGS. `\tag`/`\intertext` are amsmath display-only:
+  // illegal inside `aligned` or inline `$…$` ("\tag not allowed here"). A tagged
+  // equation therefore needs a REAL numbered environment. align* supports \tag,
+  // &, \\ and adds no spurious numbers on untagged rows; it does span the line
+  // width, but that is exactly how a numbered equation reads in the document.
   const cleaned = latex.replace(/\\label\s*\{[^}]*\}/g, '').replace(/\\(?:nonumber|notag)\b/g, '');
+  const needsDisplayEnv = /\\(?:tag\*?|intertext)\b/.test(cleaned);
   const body = inline
     ? `$${cleaned}$`
-    : /\\\\|&/.test(cleaned)
-      ? `$\\displaystyle\\begin{aligned}\n${cleaned}\n\\end{aligned}$`
-      : `$\\displaystyle ${cleaned}$`;
+    : needsDisplayEnv
+      ? `\\begin{align*}\n${cleaned}\n\\end{align*}`
+      : /\\\\|&/.test(cleaned)
+        ? `$\\displaystyle\\begin{aligned}\n${cleaned}\n\\end{aligned}$`
+        : `$\\displaystyle ${cleaned}$`;
   // Near-zero border: the PNG is just the glyphs, so the client can size it
   // 1:1 with the surrounding text.
   return [

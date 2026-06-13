@@ -89,6 +89,11 @@ export function cleanForKatex(latex: string): string {
   return latex
     .replace(/\\label\s*\{[^}]*\}/g, '')
     .replace(/\\(?:nonumber|notag)\b/g, '')
+    // \tag / \intertext are amsmath display-only — KaTeX throws on them inside an
+    // `aligned` placeholder. Drop them for the instant preview; the real
+    // TeX-engine snippet (which renders an align* environment) keeps the tag.
+    .replace(/\\tag\*?\s*\{[^}]*\}/g, '')
+    .replace(/\\intertext\s*\{[^}]*\}/g, '')
     .replace(/\\(?:vspace|hspace)\s*\*?\s*\{[^}]*\}/g, '')
     .replace(/\\(?:mbox|hbox)\s*\{([^{}]*)\}/g, '\\text{$1}')
     .replace(/%[^\n]*/g, '')

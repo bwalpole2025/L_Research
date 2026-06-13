@@ -55,4 +55,12 @@ describe('cleanForKatex + renderPreview', () => {
     const el = renderPreview('x &= y \\\\ z &= w', true);
     expect(el.querySelector('.katex')).toBeTruthy();
   });
+
+  it('strips equation tags (\\tag/\\intertext) — KaTeX throws on them inside aligned', () => {
+    expect(cleanForKatex('E &= mc^2 \\tag{1} \\\\ F &= ma \\tag*{$\\ast$}')).toBe('E &= mc^2  \\\\ F &= ma');
+    expect(cleanForKatex('x = y \\intertext{and then} z = w')).toBe('x = y  z = w');
+    // A tagged align body still renders (no thrown KaTeX error) once tags are gone.
+    const el = renderPreview('E &= mc^2 \\tag{1} \\\\ F &= ma \\tag{2}', true);
+    expect(el.querySelector('.katex')).toBeTruthy();
+  });
 });

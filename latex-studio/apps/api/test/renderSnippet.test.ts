@@ -75,6 +75,29 @@ describe('POST /projects/:id/render-snippet (live texlive + mathcheck)', () => {
     expect((res.json() as { pngBase64: string }).pngBase64.length).toBeGreaterThan(300);
   }, 120000);
 
+  it('a display block with equation TAGS renders (align*), where aligned-in-$ would fail', async () => {
+    // The inner content of an align environment with \tag on its rows — what the
+    // Visual editor passes for a tagged equation. \tag is illegal inside `aligned`
+    // / inline `$…$`, so this must be wrapped in a real numbered environment.
+    const res = await app.inject({
+      method: 'POST',
+      url: `/projects/${projectId}/render-snippet`,
+      headers: auth,
+      payload: { kind: 'math', latex: 'E &= mc^2 \\tag{1} \\\\\n F &= ma \\tag{2}' },
+    });
+    expect(res.statusCode, res.body.slice(0, 400)).toBe(200);
+    expect((res.json() as { pngBase64: string }).pngBase64.length).toBeGreaterThan(500);
+
+    // A single tagged equation (no &) too.
+    const single = await app.inject({
+      method: 'POST',
+      url: `/projects/${projectId}/render-snippet`,
+      headers: auth,
+      payload: { kind: 'math', latex: '\\nabla \\cdot \\boldsymbol{u} = 0 \\tag{$\\ast$}' },
+    });
+    expect(single.statusCode, single.body.slice(0, 400)).toBe(200);
+  }, 120000);
+
   it('a snippet that cannot compile returns 422 with a log tail (never a broken image)', async () => {
     const res = await app.inject({
       method: 'POST',
